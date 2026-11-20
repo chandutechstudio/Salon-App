@@ -8,9 +8,8 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <script type="module">
-        import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { auth, salonNameToSlug, normalizeSalonId, getSalonDocRef } from "./tenant.js";
+        import { salonNameToSlug, normalizeSalonId, getSalonDocRef, requireAdminAuth } from "./tenant.js";
 
         let currentAdminUser = null;
         let currentSalonSlug = "";
@@ -116,18 +115,19 @@
         window.saveSalonSettings = async function(event) {
             event.preventDefault();
             if (!currentAdminUser) {
-                window.location.href = "index.html";
+                window.location.replace("index.html");
                 return;
             }
 
             const salonName = (document.getElementById("salonNameInput").value || "").trim();
-            const slug = salonNameToSlug(salonName);
+            const newSlug = salonNameToSlug(salonName);
+            const oldSlug = normalizeSalonId(currentSalonSlug || sessionStorage.getItem("activeSalonId") || "");
             const phone = (document.getElementById("salonPhoneInput").value || "").trim();
             const city = (document.getElementById("salonCityInput").value || "").trim();
             const address = (document.getElementById("salonAddressInput").value || "").trim();
             const openingHours = (document.getElementById("salonHoursInput").value || "").trim();
 
-            if (!salonName || !slug) {
+            if (!salonName || !newSlug) {
                 showStatus("Please enter a valid Salon Name (letters or numbers).", true);
                 return;
             }
@@ -137,19 +137,73 @@
             saveBtn.innerText = "Saving...";
 
             try {
-                currentSalonSlug = slug;
-                sessionStorage.setItem("activeSalonId", slug);
-                sessionStorage.setItem("salonName", salonName);
+                let previousSlugs = [];
+                if (oldSlug && oldSlug !== newSlug) {
+                    try {
+                        const oldSnap = await getDoc(getSalonDocRef(oldSlug));
+                        const oldData = oldSnap.exists() ? (oldSnap.data() || {}) : {};
+                        const existingPrev = Array.isArray(oldData.previousSlugs) ? oldData.previousSlugs : [];
+                        previousSlugs = Array.from(new Set([...existingPrev, oldSlug]));
+
+                        // Purane slug ko naye slug par redirect/link rakhein taaki existing users & links na tootein
+                        await setDoc(
+                            getSalonDocRef(oldSlug),
+                            {
+                                salonId: oldSlug,
+                                salonName,
+                                redirectToSlug: newSlug,
+                                previousSlugs,
+                                ownerUid: currentAdminUser.uid,
+                                ownerEmail: (currentAdminUser.email || "").toLowerCase(),
+                                updatedAt: serverTimestamp()
+                            },
+                            { merge: true }
+                        );
+                    } catch (_) {}
+                }
+
+                // Naye salon doc mein purane data aur previousSlugs ko preserve rakhein
+                let preservedFields = {};
+                try {
+                    const existingNewSnap = await getDoc(getSalonDocRef(newSlug));
+                    if (existingNewSnap.exists()) {
+                        preservedFields = existingNewSnap.data() || {};
+                    } else if (oldSlug && oldSlug !== newSlug) {
+                        const oldSnap = await getDoc(getSalonDocRef(oldSlug));
+                        if (oldSnap.exists()) {
+                            const od = oldSnap.data() || {};
+                            preservedFields = {
+                                upiId: od.upiId || "",
+                                qrCodeImage: od.qrCodeImage || "",
+                                qrCodeBase64: od.qrCodeBase64 || "",
+                                qrUrl: od.qrUrl || "",
+                                zapUnlocked: od.zapUnlocked === true,
+                                zapGatewayStatus: od.zapGatewayStatus || "disabled",
+                                zapApiKey: od.zapApiKey || ""
+                            };
+                        }
+                    }
+                } catch (_) {}
+
+                const mergedPrevSlugs = Array.from(
+                    new Set([
+                        ...(Array.isArray(preservedFields.previousSlugs) ? preservedFields.previousSlugs : []),
+                        ...previousSlugs
+                    ])
+                );
 
                 await setDoc(
-                    getSalonDocRef(slug),
+                    getSalonDocRef(newSlug),
                     {
-                        salonId: slug,
+                        ...preservedFields,
+                        salonId: newSlug,
                         salonName,
                         phone,
                         city,
                         address,
                         openingHours,
+                        previousSlugs: mergedPrevSlugs,
+                        redirectToSlug: "",
                         ownerUid: currentAdminUser.uid,
                         ownerEmail: (currentAdminUser.email || "").toLowerCase(),
                         updatedAt: serverTimestamp()
@@ -161,7 +215,8 @@
                     await setDoc(
                         getSalonDocRef(currentAdminUser.email.toLowerCase()),
                         {
-                            linkedSalonSlug: slug,
+                            linkedSalonSlug: newSlug,
+                            previousSlugs: mergedPrevSlugs,
                             salonName,
                             ownerUid: currentAdminUser.uid,
                             ownerEmail: currentAdminUser.email.toLowerCase(),
@@ -171,8 +226,17 @@
                     ).catch(() => {});
                 }
 
+                currentSalonSlug = newSlug;
+                sessionStorage.setItem("activeSalonId", newSlug);
+                sessionStorage.setItem("salonName", salonName);
+
+                const url = new URL(window.location.href);
+                url.searchParams.set("salon", newSlug);
+                window.history.replaceState({}, document.title, url.toString());
+
+                listenSalonSettings(newSlug);
                 refreshSlugPreview();
-                showStatus("Salon Name & Customer Link saved! Customer URL slug: " + slug);
+                showStatus("Salon Name & Customer Link saved! Active slug: " + newSlug + (oldSlug && oldSlug !== newSlug ? " (Old slug '" + oldSlug + "' redirected safely)" : ""));
             } catch (err) {
                 console.error("Save salon settings error:", err);
                 showStatus("Failed to save settings: " + err.message, true);
@@ -182,39 +246,21 @@
             }
         };
 
-        onAuthStateChanged(auth, async (user) => {
-            if (!user) {
-                window.location.replace("index.html");
-                return;
-            }
+        requireAdminAuth(async (user, resolvedSlug) => {
             currentAdminUser = user;
+            document.body.classList.remove("hidden");
 
-            const params = new URLSearchParams(window.location.search);
-            let resolvedSlug =
-                normalizeSalonId(params.get("salon")) ||
-                normalizeSalonId(sessionStorage.getItem("activeSalonId"));
-
-            if (user.email) {
-                try {
-                    const emailDoc = await getDoc(getSalonDocRef(user.email.toLowerCase()));
-                    if (emailDoc.exists() && emailDoc.data()?.linkedSalonSlug) {
-                        resolvedSlug = normalizeSalonId(emailDoc.data().linkedSalonSlug) || resolvedSlug;
-                    }
-                } catch (_) {}
+            const url = new URL(window.location.href);
+            if (url.searchParams.get("salon") !== resolvedSlug) {
+                url.searchParams.set("salon", resolvedSlug);
+                window.history.replaceState({}, document.title, url.toString());
             }
 
-            if (resolvedSlug) {
-                sessionStorage.setItem("activeSalonId", resolvedSlug);
-                listenSalonSettings(resolvedSlug);
-            } else {
-                const fallbackName = sessionStorage.getItem("salonName") || user.email?.split("@")[0] || "My Salon";
-                document.getElementById("salonNameInput").value = fallbackName;
-                refreshSlugPreview();
-            }
+            listenSalonSettings(resolvedSlug);
         });
     </script>
 </head>
-<body class="bg-gray-50 font-sans text-gray-800 p-4 md:p-8">
+<body class="bg-gray-50 font-sans text-gray-800 p-4 md:p-8 hidden">
 
     <div class="max-w-4xl mx-auto space-y-6">
 
