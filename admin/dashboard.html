@@ -6,271 +6,241 @@
     <title>Salon Admin - Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
+
     <script type="module">
-        import { doc, getDoc, setDoc, getDocs, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { db, normalizeSalonId, getSalonDocRef, getSalonSubcollectionRef, buildSalonUrl } from "./tenant.js";
+        import { getDoc, setDoc, updateDoc, doc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { auth, db, normalizeSalonId, getSalonDocRef, getSalonSubcollectionRef, getSubscriptionDocRef, buildSalonUrl, verifyAdminSalonAccess } from "./tenant.js";
 
-        const auth = getAuth();
         let resolvedSalonSlug = "";
+        let unsubscribers = [];
 
-        async function resolveAdminSalonSlug(user) {
-            const params = new URLSearchParams(window.location.search);
-            let slug = normalizeSalonId(
-                params.get("salon") ||
-                sessionStorage.getItem("activeSalonId") ||
-                localStorage.getItem("currentSalonSlug") ||
-                localStorage.getItem("activeSalonId") ||
-                ""
-            );
-
-            const emailKey = (user?.email || localStorage.getItem("adminEmail") || "").trim().toLowerCase();
-            const emailSlug = normalizeSalonId(emailKey);
-
-            if (emailSlug) {
-                try {
-                    const emailDoc = await getDoc(getSalonDocRef(emailSlug));
-                    if (emailDoc.exists() && emailDoc.data()?.linkedSalonSlug) {
-                        slug = normalizeSalonId(emailDoc.data().linkedSalonSlug) || slug;
-                    }
-                } catch (e) {
-                    console.warn("Linked salon lookup warning:", e);
-                }
-            }
-
-            if (!slug && emailSlug) {
-                slug = emailSlug;
-            }
-            return slug;
+        function clearListeners() {
+            unsubscribers.forEach((fn) => {
+                try { fn(); } catch (_) {}
+            });
+            unsubscribers = [];
         }
 
         function clearAdminSession() {
-            localStorage.removeItem("isAdminLoggedIn");
-            localStorage.removeItem("activeSalonId");
-            localStorage.removeItem("currentSalonSlug");
-            localStorage.removeItem("adminUsername");
-            localStorage.removeItem("adminEmail");
-            localStorage.removeItem("salonUserPhone");
-            sessionStorage.removeItem("activeSalonId");
+            clearListeners();
+            sessionStorage.clear();
+        }
+
+        function escapeHtml(str) {
+            return String(str ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function renderBookingsTable(querySnapshot) {
+            const tableEl = document.getElementById("adminBookingsTable");
+            let html = "";
+            let pendingCount = 0;
+            let completedCount = 0;
+            let totalEarnings = 0;
+            let uniqueUsers = new Set();
+            let totalBookingsCount = 0;
+
+            querySnapshot.forEach((docSnap) => {
+                const b = docSnap.data();
+                const docId = escapeHtml(docSnap.id);
+                totalBookingsCount++;
+                uniqueUsers.add(b.userPhone || b.phone || b.userEmail || b.userId || "Customer");
+
+                const status = b.status || "Pending";
+                if (status === "Pending" || status === "pending") {
+                    pendingCount++;
+                } else if (["Completed", "Successful", "Approved", "confirmed", "Confirmed"].includes(status)) {
+                    completedCount++;
+                    const priceMatch = String(b.service || "").match(/₹(\d+)/) || String(b.amount || "").match(/(\d+)/);
+                    if (priceMatch) {
+                        totalEarnings += parseInt(priceMatch[1], 10);
+                    }
+                }
+
+                let badge = "bg-amber-50 text-amber-700 border-amber-200";
+                if (["Completed", "Successful", "Approved", "confirmed", "Confirmed"].includes(status)) {
+                    badge = "bg-green-50 text-green-700 border-green-200";
+                } else if (["Rejected", "cancelled"].includes(status)) {
+                    badge = "bg-red-50 text-red-700 border-red-200";
+                }
+
+                let actionButtons = `
+                    <button onclick="updateBookingStatus('${docId}', 'Completed')" class="bg-green-600 text-white px-2.5 py-1 rounded-lg font-bold hover:bg-green-700 transition cursor-pointer">Approve</button>
+                    <button onclick="updateBookingStatus('${docId}', 'Rejected')" class="bg-red-500 text-white px-2.5 py-1 rounded-lg font-bold hover:bg-red-600 transition cursor-pointer">Reject</button>
+                `;
+
+                if (!["Pending", "pending"].includes(status)) {
+                    actionButtons = `<span class="text-gray-400 font-semibold italic">Processed</span>`;
+                }
+
+                const clientName = escapeHtml(b.userName || b.customerName || b.name || "Client");
+                const clientPhone = escapeHtml(b.userPhone || b.phone || b.userEmail || "N/A");
+                const dateTimeText = escapeHtml(b.slotLabel || (b.time ? String(b.time).replace("T", " ") : `${b.date || ""} ${b.slot || ""}`.trim() || "N/A"));
+
+                html += `
+                    <tr class="hover:bg-gray-50 border-b">
+                        <td class="p-3"><b>${clientName}</b><br><span class="text-gray-400">${clientPhone}</span></td>
+                        <td class="p-3"><span class="bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-bold">${escapeHtml(b.service || "General Service")}</span></td>
+                        <td class="p-3">${dateTimeText}</td>
+                        <td class="p-3"><b>${escapeHtml(b.paymentType || "UPI")}</b><br><span class="text-gray-500 text-[11px]">UTR: ${escapeHtml(b.utr || "N/A")}</span></td>
+                        <td class="p-3"><span class="px-2.5 py-1 rounded-xl border font-bold ${badge}">${escapeHtml(status)}</span></td>
+                        <td class="p-3 space-x-1">${actionButtons}</td>
+                    </tr>
+                `;
+            });
+
+            document.getElementById("statTotalUsers").innerText = uniqueUsers.size;
+            document.getElementById("statTotalEarnings").innerText = `₹${totalEarnings}`;
+            document.getElementById("statCompleted").innerText = completedCount;
+            document.getElementById("statPending").innerText = pendingCount;
+            document.getElementById("bookingCountBadge").innerText = `${totalBookingsCount} Total`;
+
+            tableEl.innerHTML = html === ""
+                ? `<tr><td colspan="6" class="p-6 text-center text-gray-400">No bookings found for your salon yet.</td></tr>`
+                : html;
+        }
+
+        function startRealtimeDashboard(salonId) {
+            clearListeners();
+
+            unsubscribers.push(
+                onSnapshot(getSalonDocRef(salonId), (snap) => {
+                    const displayTitle = snap.exists() && snap.data()?.salonName ? snap.data().salonName : salonId;
+                    document.getElementById("adminWelcomeName").innerText = displayTitle;
+                })
+            );
+
+            const subRef = getSubscriptionDocRef(salonId);
+            unsubscribers.push(
+                onSnapshot(subRef, (docSnap) => {
+                    const statusEl = document.getElementById("subStatusText");
+                    const validityEl = document.getElementById("subValidityText");
+
+                    if (!docSnap.exists() || !docSnap.data()?.validity) {
+                        window.location.href = `subscription.html?salon=${encodeURIComponent(salonId)}`;
+                        return;
+                    }
+
+                    const data = docSnap.data();
+                    const expiryDate = new Date(data.validity);
+                    const diff = expiryDate.getTime() - Date.now();
+                    const remainingDays = Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+
+                    if (remainingDays > 0 && data.status !== "Expired") {
+                        statusEl.innerText = `${remainingDays} Days Remaining`;
+                        statusEl.className = "text-lg font-extrabold text-green-600";
+                        validityEl.innerText = `Valid until: ${expiryDate.toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" })}`;
+                    } else {
+                        statusEl.innerText = "Subscription Expired";
+                        statusEl.className = "text-lg font-extrabold text-red-600";
+                        validityEl.innerText = "Please renew your plan";
+                        window.location.href = `subscription.html?salon=${encodeURIComponent(salonId)}`;
+                    }
+                })
+            );
+
+            unsubscribers.push(
+                onSnapshot(getSalonSubcollectionRef(salonId, "bookings"), (querySnapshot) => {
+                    renderBookingsTable(querySnapshot);
+                }, (error) => {
+                    console.error("Realtime bookings error:", error);
+                })
+            );
         }
 
         onAuthStateChanged(auth, async (user) => {
-            if (!user && localStorage.getItem("isAdminLoggedIn") !== "true") {
+            if (!user) {
                 window.location.href = "index.html";
                 return;
             }
 
-            const salonId = await resolveAdminSalonSlug(user);
-            if (!salonId) {
+            const params = new URLSearchParams(window.location.search);
+            const candidate = params.get("salon") || sessionStorage.getItem("activeSalonId") || "";
+            const access = await verifyAdminSalonAccess(user, candidate);
+
+            if (!access.ok || !access.salonId) {
                 clearAdminSession();
                 window.location.href = "index.html";
                 return;
             }
 
+            const salonId = access.salonId;
             resolvedSalonSlug = salonId;
             sessionStorage.setItem("activeSalonId", salonId);
-            localStorage.setItem("activeSalonId", salonId);
-            localStorage.setItem("currentSalonSlug", salonId);
 
-            let salonDisplayTitle = salonId;
-            try {
-                const salonSnap = await getDoc(getSalonDocRef(salonId));
-                if (salonSnap.exists() && salonSnap.data()?.salonName) {
-                    salonDisplayTitle = salonSnap.data().salonName;
-                    localStorage.setItem("salonName", salonDisplayTitle);
-                }
-            } catch (_) {}
+            if (access.redirectedFromUnauthorized || params.get("salon") !== salonId) {
+                const cleanUrl = new URL(window.location.href);
+                cleanUrl.searchParams.set("salon", salonId);
+                window.history.replaceState({}, document.title, cleanUrl.toString());
+            }
 
-            document.getElementById("adminWelcomeName").innerText = salonDisplayTitle;
+            document.getElementById("adminWelcomeName").innerText = salonId;
             document.getElementById("activeSalonIdBadge").innerText = `Salon Slug: ${salonId}`;
             document.getElementById("customerShareLink").value = buildSalonUrl("../index.html", salonId);
 
             const settingsLink = document.getElementById("goToSettingsBtn");
-            if (settingsLink) {
-                settingsLink.href = `settings.html?salon=${encodeURIComponent(salonId)}`;
-            }
+            if (settingsLink) settingsLink.href = `settings.html?salon=${encodeURIComponent(salonId)}`;
 
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.get("status") === "success" || window.location.search.includes("success")) {
-                const planDays = parseInt(localStorage.getItem("pendingPlanDays")) || 30;
+            const renewalLink = document.getElementById("renewalLinkBtn");
+            if (renewalLink) renewalLink.href = `subscription.html?salon=${encodeURIComponent(salonId)}`;
+
+            const pendingOrder = sessionStorage.getItem("pendingPlanOrderId");
+            if ((params.get("status") === "success" || window.location.search.includes("success")) && pendingOrder) {
+                const planDays = parseInt(sessionStorage.getItem("pendingPlanDays"), 10) || 30;
+                const planName = sessionStorage.getItem("pendingPlanName") || "Paid Plan";
                 try {
-                    const docRef = doc(db, "subscriptions", salonId);
+                    const docRef = getSubscriptionDocRef(salonId);
                     const docSnap = await getDoc(docRef);
 
                     let baseDate = new Date();
                     if (docSnap.exists() && docSnap.data().validity) {
                         const existingExpiry = new Date(docSnap.data().validity);
-                        if (existingExpiry > baseDate) {
+                        if (!Number.isNaN(existingExpiry.getTime()) && existingExpiry > baseDate) {
                             baseDate = existingExpiry;
                         }
                     }
-
                     baseDate.setDate(baseDate.getDate() + planDays);
 
                     await setDoc(docRef, {
                         salonId,
-                        salonName: salonDisplayTitle,
-                        ownerEmail: (user?.email || localStorage.getItem("adminEmail") || "").toLowerCase(),
-                        plan: localStorage.getItem("pendingPlanName") || "Paid Plan",
+                        ownerUid: user.uid,
+                        ownerEmail: (user.email || "").toLowerCase(),
+                        plan: planName,
+                        lastPaymentOrderId: pendingOrder,
                         status: "Active",
                         validity: baseDate.toISOString(),
                         trialClaimed: true,
                         updatedAt: serverTimestamp()
                     }, { merge: true });
 
-                    localStorage.removeItem("pendingPlanDays");
-                    localStorage.removeItem("pendingPlanName");
-                    window.history.replaceState({}, document.title, window.location.pathname);
+                    sessionStorage.removeItem("pendingPlanOrderId");
+                    sessionStorage.removeItem("pendingPlanDays");
+                    sessionStorage.removeItem("pendingPlanName");
+                    window.history.replaceState({}, document.title, window.location.pathname + `?salon=${encodeURIComponent(salonId)}`);
 
-                    if (typeof showSuccessModal === "function") {
-                        showSuccessModal();
+                    if (typeof window.showSuccessModal === "function") {
+                        window.showSuccessModal();
                     }
                 } catch (error) {
                     console.error("Error extending subscription:", error);
                 }
             }
 
-            const isSubValid = await checkSubscriptionAndLock(salonId);
-            if (isSubValid) {
-                await loadAdminBookingsFromFirestore(salonId);
-            }
+            startRealtimeDashboard(salonId);
         });
 
-        async function checkSubscriptionAndLock(salonId) {
-            try {
-                const docRef = doc(db, "subscriptions", salonId);
-                const docSnap = await getDoc(docRef);
-
-                const statusEl = document.getElementById("subStatusText");
-                const validityEl = document.getElementById("subValidityText");
-
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-
-                    let expiryDate;
-                    if (!data.validity) {
-                        expiryDate = new Date();
-                        expiryDate.setDate(expiryDate.getDate() + 7);
-                        await setDoc(docRef, { validity: expiryDate.toISOString() }, { merge: true });
-                    } else {
-                        expiryDate = new Date(data.validity);
-                    }
-
-                    const currentDate = new Date();
-                    const timeDifference = expiryDate.getTime() - currentDate.getTime();
-                    let remainingDays = Math.ceil(timeDifference / (1000 * 60 * 60 * 24));
-                    if (remainingDays < 0) remainingDays = 0;
-
-                    if (remainingDays > 0) {
-                        statusEl.innerText = `${remainingDays} Days Remaining`;
-                        statusEl.className = "text-lg font-extrabold text-green-600";
-                        validityEl.innerText = `Valid until: ${expiryDate.toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric" })}`;
-                        return true;
-                    } else {
-                        statusEl.innerText = "Subscription Expired";
-                        statusEl.className = "text-lg font-extrabold text-red-600";
-                        validityEl.innerText = "Please renew your plan";
-                        alert("Aapka Free Trial ya Subscription khatam ho gaya hai! Dashboard use karne ke liye plan renew karein.");
-                        window.location.href = `subscription.html?salon=${encodeURIComponent(salonId)}`;
-                        return false;
-                    }
-                } else {
-                    window.location.href = `subscription.html?salon=${encodeURIComponent(salonId)}`;
-                    return false;
-                }
-            } catch (e) {
-                console.error("Error checking subscription:", e);
-                return true;
-            }
-        }
-
-        async function loadAdminBookingsFromFirestore(salonId) {
-            const tableEl = document.getElementById("adminBookingsTable");
-            try {
-                const bookingsRef = getSalonSubcollectionRef(salonId, "bookings");
-                const querySnapshot = await getDocs(bookingsRef);
-
-                let html = "";
-                let pendingCount = 0;
-                let completedCount = 0;
-                let totalEarnings = 0;
-                let uniqueUsers = new Set();
-                let totalBookingsCount = 0;
-
-                querySnapshot.forEach((docSnap) => {
-                    const b = docSnap.data();
-                    const docId = docSnap.id;
-                    totalBookingsCount++;
-                    uniqueUsers.add(b.userPhone || b.phone || b.userEmail || "Customer");
-
-                    const status = b.status || "Pending";
-                    if (status === "Pending" || status === "pending") {
-                        pendingCount++;
-                    } else if (["Completed", "Successful", "Approved", "confirmed"].includes(status)) {
-                        completedCount++;
-                        const priceMatch = String(b.service || "").match(/₹(\d+)/) || String(b.amount || "").match(/(\d+)/);
-                        if (priceMatch) {
-                            totalEarnings += parseInt(priceMatch[1], 10);
-                        }
-                    }
-
-                    let badge = "bg-amber-50 text-amber-700 border-amber-200";
-                    if (["Completed", "Successful", "Approved", "confirmed"].includes(status)) {
-                        badge = "bg-green-50 text-green-700 border-green-200";
-                    } else if (["Rejected", "cancelled"].includes(status)) {
-                        badge = "bg-red-50 text-red-700 border-red-200";
-                    }
-
-                    let actionButtons = `
-                        <button onclick="updateBookingStatus('${docId}', 'Completed')" class="bg-green-600 text-white px-2.5 py-1 rounded-lg font-bold hover:bg-green-700 transition cursor-pointer">Approve</button>
-                        <button onclick="updateBookingStatus('${docId}', 'Rejected')" class="bg-red-500 text-white px-2.5 py-1 rounded-lg font-bold hover:bg-red-600 transition cursor-pointer">Reject</button>
-                    `;
-
-                    if (!["Pending", "pending"].includes(status)) {
-                        actionButtons = `<span class="text-gray-400 font-semibold italic">Processed</span>`;
-                    }
-
-                    const clientName = b.userName || b.customerName || b.name || "Client";
-                    const clientPhone = b.userPhone || b.phone || b.userEmail || "N/A";
-                    const dateTimeText = b.time ? String(b.time).replace("T", " ") : `${b.date || ""} ${b.slot || ""}`.trim() || "N/A";
-
-                    html += `
-                        <tr class="hover:bg-gray-50 border-b">
-                            <td class="p-3"><b>${clientName}</b><br><span class="text-gray-400">${clientPhone}</span></td>
-                            <td class="p-3"><span class="bg-indigo-50 text-indigo-700 px-2 py-1 rounded font-bold">${b.service || "General Service"}</span></td>
-                            <td class="p-3">${dateTimeText}</td>
-                            <td class="p-3"><b>${b.paymentType || "UPI"}</b><br><span class="text-gray-500 text-[11px]">UTR: ${b.utr || "N/A"}</span></td>
-                            <td class="p-3"><span class="px-2.5 py-1 rounded-xl border font-bold ${badge}">${status}</span></td>
-                            <td class="p-3 space-x-1">${actionButtons}</td>
-                        </tr>
-                    `;
-                });
-
-                document.getElementById("statTotalUsers").innerText = uniqueUsers.size;
-                document.getElementById("statTotalEarnings").innerText = `₹${totalEarnings}`;
-                document.getElementById("statCompleted").innerText = completedCount;
-                document.getElementById("statPending").innerText = pendingCount;
-                document.getElementById("bookingCountBadge").innerText = `${totalBookingsCount} Total`;
-
-                tableEl.innerHTML = html === ""
-                    ? `<tr><td colspan="6" class="p-6 text-center text-gray-400">No bookings found for your salon yet.</td></tr>`
-                    : html;
-            } catch (error) {
-                console.error("Error loading bookings from Firestore:", error);
-                tableEl.innerHTML = `<tr><td colspan="6" class="p-6 text-center text-red-500">Error loading data. Please check connection.</td></tr>`;
-            }
-        }
-
         window.updateBookingStatus = async function(docId, newStatus) {
-            const salonId = resolvedSalonSlug || localStorage.getItem("currentSalonSlug") || localStorage.getItem("activeSalonId");
+            const salonId = resolvedSalonSlug || sessionStorage.getItem("activeSalonId");
             if (!salonId) return;
 
             try {
                 const bookingRef = doc(db, "salons", salonId, "bookings", docId);
-                await updateDoc(bookingRef, { status: newStatus });
-                alert(`Booking marked as ${newStatus}!`);
-                location.reload();
+                await updateDoc(bookingRef, { status: newStatus, updatedAt: serverTimestamp() });
             } catch (error) {
                 console.error("Error updating status:", error);
                 alert("Failed to update status.");
@@ -280,15 +250,13 @@
         window.copyCustomerLink = function() {
             const input = document.getElementById("customerShareLink");
             input.select();
-            navigator.clipboard.writeText(input.value);
+            navigator.clipboard?.writeText(input.value).catch(() => {});
             alert("Customer booking link copied!");
         };
 
         window.adminLogout = async function() {
             clearAdminSession();
-            try {
-                await signOut(auth);
-            } catch (e) {}
+            try { await signOut(auth); } catch (_) {}
             window.location.href = "index.html";
         };
     </script>
@@ -296,20 +264,20 @@
 <body class="bg-gray-100 font-sans text-gray-800 p-4 md:p-8">
 
     <div class="max-w-6xl mx-auto space-y-6">
-        
+
         <header class="bg-indigo-600 text-white p-6 rounded-3xl shadow-md flex flex-col md:flex-row justify-between items-center gap-6">
             <div class="space-y-1 text-center md:text-left">
                 <h1 class="text-2xl font-bold"><i class="fa-solid fa-chart-line mr-1"></i> Admin Dashboard</h1>
                 <p class="text-xs text-indigo-200">Welcome back, <span id="adminWelcomeName" class="font-bold text-white">Admin</span>! <span id="activeSalonIdBadge" class="ml-1 bg-white/15 px-2 py-0.5 rounded"></span></p>
             </div>
-            
+
             <div class="bg-white text-gray-800 p-4 rounded-2xl shadow-inner flex flex-col items-center text-center w-full md:w-72 space-y-2 border-2 border-green-500">
                 <div>
                     <p class="text-[11px] font-bold text-gray-500 uppercase tracking-wider">Subscription Status</p>
                     <h3 id="subStatusText" class="text-lg font-extrabold text-green-600">Loading Status...</h3>
                     <p id="subValidityText" class="text-[10px] text-gray-400">Checking validity...</p>
                 </div>
-                <a href="subscription.html" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded-xl text-xs transition shadow flex items-center justify-center gap-1.5">
+                <a id="renewalLinkBtn" href="subscription.html" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded-xl text-xs transition shadow flex items-center justify-center gap-1.5">
                     <i class="fa-solid fa-rotate"></i> Renewal Subscription
                 </a>
             </div>
@@ -426,7 +394,6 @@
         window.closeSuccessModal = function() {
             const modal = document.getElementById("successModal");
             if (modal) modal.classList.add("hidden");
-            location.reload();
         };
     </script>
 </body>
