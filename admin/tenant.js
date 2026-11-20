@@ -1,6 +1,5 @@
-// tenant.js - Multi-tenant salon helper for Firestore, Auth & URL routing
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getFirestore, doc, collection } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+import { getFirestore, doc, collection, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { getAuth } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
 const firebaseConfig = {
@@ -43,25 +42,12 @@ export function resolveActiveSalonId({ persist = true } = {}) {
     if (fromUrl) {
         if (persist) {
             sessionStorage.setItem("activeSalonId", fromUrl);
-            localStorage.setItem("activeSalonId", fromUrl);
         }
         return fromUrl;
     }
 
     const fromSession = normalizeSalonId(sessionStorage.getItem("activeSalonId"));
     if (fromSession) return fromSession;
-
-    const fromLocal = normalizeSalonId(
-        localStorage.getItem("currentSalonSlug") ||
-        localStorage.getItem("activeSalonId") ||
-        localStorage.getItem("currentSalonEmail") ||
-        localStorage.getItem("adminEmail") ||
-        ""
-    );
-    if (fromLocal) {
-        if (persist) sessionStorage.setItem("activeSalonId", fromLocal);
-        return fromLocal;
-    }
 
     return "";
 }
@@ -90,7 +76,47 @@ export function getSalonSubcollectionRef(salonId, subcollectionName) {
     return collection(db, "salons", id, subcollectionName);
 }
 
-export function getTenantStorageKey(salonId, keyName) {
-    const id = normalizeSalonId(salonId) || "unassigned";
-    return `salon_tenant::${id}::${keyName}`;
+export function getSubscriptionDocRef(salonId) {
+    const id = normalizeSalonId(salonId);
+    if (!id) throw new Error("Missing active salon tenant ID.");
+    return doc(db, "subscriptions", id);
+}
+
+// Verify karta hai ki logged-in admin hi is salon ka owner hai
+export async function verifyAdminSalonAccess(user, candidateSlug) {
+    if (!user) return { ok: false, salonId: "" };
+
+    const cleanCandidate = normalizeSalonId(candidateSlug);
+    const emailKey = String(user.email || "").trim().toLowerCase();
+    let ownedSlug = "";
+
+    if (emailKey) {
+        try {
+            const emailSnap = await getDoc(getSalonDocRef(emailKey));
+            if (emailSnap.exists() && emailSnap.data()?.linkedSalonSlug) {
+                ownedSlug = normalizeSalonId(emailSnap.data().linkedSalonSlug);
+            }
+        } catch (_) {}
+    }
+
+    const targetSlug = cleanCandidate || ownedSlug || normalizeSalonId(emailKey);
+    if (!targetSlug) return { ok: false, salonId: "" };
+
+    try {
+        const salonSnap = await getDoc(getSalonDocRef(targetSlug));
+        if (salonSnap.exists()) {
+            const data = salonSnap.data() || {};
+            const ownerUidMatch = data.ownerUid && data.ownerUid === user.uid;
+            const ownerEmailMatch = data.ownerEmail && emailKey && String(data.ownerEmail).toLowerCase() === emailKey;
+
+            if (!ownerUidMatch && !ownerEmailMatch) {
+                if (ownedSlug && ownedSlug !== targetSlug) {
+                    return { ok: true, salonId: ownedSlug, redirectedFromUnauthorized: true };
+                }
+                return { ok: false, salonId: "" };
+            }
+        }
+    } catch (_) {}
+
+    return { ok: true, salonId: targetSlug, redirectedFromUnauthorized: false };
 }
