@@ -8,89 +8,79 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <script type="module">
-        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { db, normalizeSalonId, getSalonDocRef } from "./tenant.js";
+        import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { auth, getSubscriptionDocRef, verifyAdminSalonAccess } from "./tenant.js";
 
-        const auth = getAuth();
         const ZAPUPI_KEY = "Zapfba972d2f8d8d61bf40b15535d3e1424";
-        
+
         let currentAmount = 100;
         let currentPlanText = "1 Month Plan";
         let currentPlanDays = 30;
         let salonId = "";
+        let unsubscribeSub = null;
 
-        async function resolveSyncedSalonId(user) {
-            const params = new URLSearchParams(window.location.search);
-            let slug = normalizeSalonId(
-                params.get("salon") ||
-                sessionStorage.getItem("activeSalonId") ||
-                localStorage.getItem("currentSalonSlug") ||
-                localStorage.getItem("activeSalonId") ||
-                ""
-            );
+        function applyTrialUiState(claimed) {
+            const trialCard = document.getElementById("freeTrialCard");
+            const trialInput = document.getElementById("trialRadio");
+            const trialText = document.getElementById("trialSubText");
 
-            const emailKey = (user?.email || localStorage.getItem("adminEmail") || "").trim().toLowerCase();
-            const emailSlug = normalizeSalonId(emailKey);
+            if (claimed) {
+                trialCard.classList.remove("cursor-pointer", "border-green-500", "bg-green-50/50");
+                trialCard.classList.add("opacity-50", "bg-gray-100", "border-gray-300", "cursor-not-allowed");
+                trialInput.disabled = true;
+                trialText.innerText = "Already Claimed";
+                trialText.className = "text-[10px] text-red-500 font-bold mt-2";
 
-            if (emailSlug) {
-                try {
-                    const emailDoc = await getDoc(getSalonDocRef(emailSlug));
-                    if (emailDoc.exists() && emailDoc.data()?.linkedSalonSlug) {
-                        slug = normalizeSalonId(emailDoc.data().linkedSalonSlug) || slug;
-                    }
-                } catch (_) {}
-            }
-
-            if (!slug && emailSlug) slug = emailSlug;
-
-            if (slug) {
-                sessionStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("currentSalonSlug", slug);
-            }
-            return slug;
-        }
-
-        async function initSubscriptionPage() {
-            try {
-                const docRef = doc(db, "subscriptions", salonId);
-                const docSnap = await getDoc(docRef);
-
-                if (docSnap.exists() && docSnap.data().trialClaimed === true) {
-                    const trialCard = document.getElementById("freeTrialCard");
-                    const trialInput = document.getElementById("trialRadio");
-                    const trialText = document.getElementById("trialSubText");
-
-                    trialCard.classList.remove("cursor-pointer", "border-green-500", "bg-green-50/50");
-                    trialCard.classList.add("opacity-50", "bg-gray-100", "border-gray-300", "cursor-not-allowed");
-                    trialInput.disabled = true;
-                    trialText.innerText = "Already Claimed";
-                    trialText.className = "text-[10px] text-red-500 font-bold mt-2";
-
+                if (currentAmount === 0) {
                     const defaultCard = document.getElementById("defaultPlanCard");
                     if (defaultCard) defaultCard.click();
-                } else {
-                    const trialCard = document.getElementById("freeTrialCard");
-                    if (trialCard) trialCard.click();
                 }
-            } catch (error) {
-                console.error("Error checking trial status:", error);
+            } else {
+                const trialCardEl = document.getElementById("freeTrialCard");
+                if (trialCardEl && currentAmount === 100 && currentPlanText === "1 Month Plan") {
+                    trialCardEl.click();
+                }
             }
+        }
+
+        function listenSubscriptionPage() {
+            if (unsubscribeSub) unsubscribeSub();
+            unsubscribeSub = onSnapshot(getSubscriptionDocRef(salonId), (docSnap) => {
+                const claimed = docSnap.exists() && docSnap.data().trialClaimed === true;
+                applyTrialUiState(claimed);
+            }, (error) => {
+                console.error("Error checking trial status:", error);
+            });
         }
 
         onAuthStateChanged(auth, async (user) => {
-            if (!user && localStorage.getItem("isAdminLoggedIn") !== "true") {
+            if (!user) {
                 window.location.href = "index.html";
                 return;
             }
-            salonId = await resolveSyncedSalonId(user);
-            if (!salonId) {
+
+            const params = new URLSearchParams(window.location.search);
+            const candidate = params.get("salon") || sessionStorage.getItem("activeSalonId") || "";
+            const access = await verifyAdminSalonAccess(user, candidate);
+
+            if (!access.ok || !access.salonId) {
+                sessionStorage.clear();
                 window.location.href = "index.html";
                 return;
             }
+
+            salonId = access.salonId;
+            sessionStorage.setItem("activeSalonId", salonId);
+
+            if (access.redirectedFromUnauthorized || params.get("salon") !== salonId) {
+                const cleanUrl = new URL(window.location.href);
+                cleanUrl.searchParams.set("salon", salonId);
+                window.history.replaceState({}, document.title, cleanUrl.toString());
+            }
+
             document.getElementById("activeSlugHeader").innerText = `Salon: ${salonId}`;
-            await initSubscriptionPage();
+            listenSubscriptionPage();
         });
 
         window.selectPlan = function(amount, planName, days, element) {
@@ -129,13 +119,13 @@
                 proceedBtn.className = "w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl text-xs transition shadow-lg shadow-indigo-100 flex items-center justify-center gap-2";
                 proceedBtn.disabled = false;
             }
-            
+
             const radio = element.querySelector('input[type="radio"]');
             if (radio) radio.checked = true;
         };
 
         window.handleAction = async function() {
-            if (!salonId) return;
+            if (!salonId || !auth.currentUser) return;
             const btn = document.getElementById("proceedBtn");
 
             if (currentAmount === 0) {
@@ -143,12 +133,12 @@
                 btn.disabled = true;
 
                 try {
-                    const docRef = doc(db, "subscriptions", salonId);
+                    const docRef = getSubscriptionDocRef(salonId);
                     const docSnap = await getDoc(docRef);
 
                     if (docSnap.exists() && docSnap.data().trialClaimed === true) {
-                        showCustomPopup("Error", "Aap pehle hi Free Trial use kar chuke hain!", "error");
-                        setTimeout(() => location.reload(), 2000);
+                        window.showCustomPopup("Error", "Aap pehle hi Free Trial use kar chuke hain!", "error");
+                        btn.disabled = false;
                         return;
                     }
 
@@ -157,7 +147,8 @@
 
                     await setDoc(docRef, {
                         salonId,
-                        ownerEmail: (auth.currentUser?.email || localStorage.getItem("adminEmail") || "").toLowerCase(),
+                        ownerUid: auth.currentUser.uid,
+                        ownerEmail: (auth.currentUser.email || "").toLowerCase(),
                         plan: "7 Days Free Trial",
                         status: "Active",
                         validity: expiryDate.toISOString(),
@@ -165,10 +156,10 @@
                         updatedAt: serverTimestamp()
                     }, { merge: true });
 
-                    showCustomPopup("Trial Activated!", "7 Days Free Trial has been activated successfully.", "success");
+                    window.showCustomPopup("Trial Activated!", "7 Days Free Trial has been activated successfully.", "success");
                 } catch (error) {
                     console.error("Error:", error);
-                    showCustomPopup("Error", "Kuch error aayi, dobara try karein.", "error");
+                    window.showCustomPopup("Error", "Kuch error aayi, dobara try karein.", "error");
                     btn.innerHTML = `<i class="fa-solid fa-check"></i> Activate 7 Days Free Trial`;
                     btn.disabled = false;
                 }
@@ -178,10 +169,19 @@
                 btn.disabled = true;
 
                 try {
-                    localStorage.setItem("pendingPlanDays", currentPlanDays);
-                    localStorage.setItem("pendingPlanName", currentPlanText);
-
                     const orderId = "SALON_" + Date.now();
+                    sessionStorage.setItem("pendingPlanOrderId", orderId);
+                    sessionStorage.setItem("pendingPlanDays", String(currentPlanDays));
+                    sessionStorage.setItem("pendingPlanName", currentPlanText);
+
+                    const successUrl = new URL("dashboard.html", window.location.href);
+                    successUrl.searchParams.set("status", "success");
+                    successUrl.searchParams.set("salon", salonId);
+                    successUrl.searchParams.set("order_id", orderId);
+
+                    const failedUrl = new URL("subscription.html", window.location.href);
+                    failedUrl.searchParams.set("salon", salonId);
+
                     const response = await fetch("https://pay.zapupi.com/api/create-order", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -191,8 +191,8 @@
                             amount: currentAmount,
                             customer_mobile: salonId,
                             remark: currentPlanText,
-                            success_url: window.location.origin + `/admin/dashboard.html?status=success&salon=${encodeURIComponent(salonId)}`,
-                            failed_url: window.location.origin + `/admin/subscription.html?salon=${encodeURIComponent(salonId)}`
+                            success_url: successUrl.toString(),
+                            failed_url: failedUrl.toString()
                         })
                     });
 
@@ -201,13 +201,13 @@
                     if (data.status === "success" && data.payment_url) {
                         window.location.href = data.payment_url;
                     } else {
-                        showCustomPopup("Payment Failed", data.message || "Please check API key.", "error");
+                        window.showCustomPopup("Payment Failed", data.message || "Please check API key.", "error");
                         btn.innerHTML = originalText;
                         btn.disabled = false;
                     }
                 } catch (error) {
                     console.error("ZapUPI Error:", error);
-                    showCustomPopup("Network Error", "Could not connect to ZapUPI gateway.", "error");
+                    window.showCustomPopup("Network Error", "Could not connect to ZapUPI gateway.", "error");
                     btn.innerHTML = originalText;
                     btn.disabled = false;
                 }
@@ -242,7 +242,7 @@
 <body class="bg-gray-50 font-sans text-gray-800 p-4 md:p-8">
 
     <div class="max-w-xl mx-auto space-y-6">
-        
+
         <header class="bg-indigo-600 text-white p-6 rounded-3xl shadow-md flex justify-between items-center">
             <div class="flex items-center gap-3">
                 <a href="dashboard.html" class="bg-white/25 hover:bg-white/30 text-white p-2.5 rounded-xl transition"><i class="fa-solid fa-arrow-left text-sm"></i></a>
@@ -258,7 +258,7 @@
             <div class="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto text-xl shadow-inner">
                 <i class="fa-solid fa-rotate"></i>
             </div>
-            
+
             <div>
                 <p class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Choose Renewal Plan</p>
                 <h2 class="text-2xl font-black text-indigo-600">Select Software Package</h2>
@@ -268,7 +268,7 @@
             <div class="space-y-3 pt-2 text-left">
                 <label class="block text-xs font-bold text-gray-700">Available Plans:</label>
                 <div class="grid grid-cols-2 gap-3">
-                    
+
                     <label id="freeTrialCard" class="border-2 border-green-500 bg-green-50/50 p-3 rounded-2xl cursor-pointer flex flex-col justify-between transition plan-card" onclick="selectPlan(0, '7 Days Free Trial', 7, this)">
                         <div class="flex justify-between items-center">
                             <span class="text-xs font-bold text-green-700"><i class="fa-solid fa-star"></i> Free Trial</span>
