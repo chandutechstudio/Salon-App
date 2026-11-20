@@ -4,14 +4,13 @@ import { getFirestore, doc, collection } from "https://www.gstatic.com/firebasej
 import { getAuth } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCqAwTcPCyG4fMzBQgY90qglDrBqIrSxiI",
-  authDomain: "chandu-x-studio.firebaseapp.com",
-  databaseURL: "https://chandu-x-studio-default-rtdb.firebaseio.com",
-  projectId: "chandu-x-studio",
-  storageBucket: "chandu-x-studio.firebasestorage.app",
-  messagingSenderId: "98671756349",
-  appId: "1:98671756349:web:f97df5df9c9f9eddca1654",
-  measurementId: "G-CSBQZG1LXS"
+  apiKey: "AIzaSyBR7QQNVmKmlAem6FRfqbMYVuK0tdwhb6I",
+  authDomain: "creator-chandu.firebaseapp.com",
+  projectId: "creator-chandu",
+  storageBucket: "creator-chandu.firebasestorage.app",
+  messagingSenderId: "536504537561",
+  appId: "1:536504537561:web:3c7d0362376f63462649c8",
+  measurementId: "G-7RLH5MVLV3"
 };
 
 export const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
