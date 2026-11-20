@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salon Admin - Control & Settings</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <script type="module">
+        import { getApps } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import {
+            salonNameToSlug,
+            normalizeSalonId,
+            getSalonDocRef
+        } from "./tenant.js";
+
+        const app = getApps()[0];
+        const auth = getAuth(app);
+
+        let currentAdminUser = null;
+        let currentSalonSlug = "";
+
+        function buildCustomerBookingLink(slug) {
+            const cleanSlug = normalizeSalonId(slug);
+            const rootUrl = new URL("../index.html", window.location.href);
+            if (cleanSlug) {
+                rootUrl.searchParams.set("salon", cleanSlug);
+            }
+            return rootUrl.toString();
+        }
+
+        function syncAdminMenuLinks(slug) {
+            const cleanSlug = normalizeSalonId(slug);
+            const links = document.querySelectorAll("a[data-admin-nav]");
+            links.forEach((link) => {
+                const basePage = link.getAttribute("data-admin-nav");
+                if (!basePage) return;
+                const targetUrl = new URL(basePage, window.location.href);
+                if (cleanSlug) {
+                    targetUrl.searchParams.set("salon", cleanSlug);
+                }
+                link.setAttribute("href", targetUrl.toString());
+            });
+        }
+
+        function refreshSlugPreview() {
+            const nameInput = document.getElementById("salonNameInput");
+            const slugPreview = document.getElementById("salonSlugPreview");
+            const linkInput = document.getElementById("customerLinkInput");
+
+            const typedName = (nameInput?.value || "").trim();
+            const generatedSlug = salonNameToSlug(typedName) || currentSalonSlug || "your-salon-name";
+
+            if (slugPreview) slugPreview.innerText = generatedSlug;
+            if (linkInput) linkInput.value = buildCustomerBookingLink(generatedSlug);
+            syncAdminMenuLinks(generatedSlug);
+        }
+
+        window.onSalonNameChange = function() {
+            refreshSlugPreview();
+        };
+
+        window.copyCustomerLink = async function() {
+            const linkInput = document.getElementById("customerLinkInput");
+            const btn = document.getElementById("copyLinkBtn");
+            if (!linkInput?.value) return;
+
+            try {
+                await navigator.clipboard.writeText(linkInput.value);
+            } catch (_) {
+                linkInput.select();
+                document.execCommand("copy");
+            }
+
+            if (btn) {
+                const oldHtml = btn.innerHTML;
+                btn.innerHTML = `<i class="fa-solid fa-check mr-1"></i> Copied`;
+                setTimeout(() => {
+                    btn.innerHTML = oldHtml;
+                }, 1800);
+            }
+        };
+
+        function showStatus(msg, isError = false) {
+            const box = document.getElementById("settingsStatusBox");
+            if (!box) return;
+            box.innerText = msg;
+            box.className = isError
+                ? "text-xs font-semibold p-3 rounded-xl bg-red-50 text-red-600 border border-red-200"
+                : "text-xs font-semibold p-3 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200";
+            box.classList.remove("hidden");
+        }
+
+        async function loadSalonSettings(slug) {
+            if (!slug) return;
+            currentSalonSlug = slug;
+            refreshSlugPreview();
+
+            try {
+                const snap = await getDoc(getSalonDocRef(slug));
+                if (snap.exists()) {
+                    const data = snap.data() || {};
+                    if (data.salonName) {
+                        document.getElementById("salonNameInput").value = data.salonName;
+                    }
+                    if (data.phone) {
+                        document.getElementById("salonPhoneInput").value = data.phone;
+                    }
+                    if (data.city) {
+                        document.getElementById("salonCityInput").value = data.city;
+                    }
+                    if (data.address) {
+                        document.getElementById("salonAddressInput").value = data.address;
+                    }
+                    if (data.openingHours) {
+                        document.getElementById("salonHoursInput").value = data.openingHours;
+                    }
+                }
+                refreshSlugPreview();
+            } catch (err) {
+                console.error("Load salon settings error:", err);
+                showStatus("Could not load salon details: " + err.message, true);
+            }
+        }
+
+        window.saveSalonSettings = async function(event) {
+            event.preventDefault();
+            if (!currentAdminUser) {
+                window.location.href = "index.html";
+                return;
+            }
+
+            const salonName = (document.getElementById("salonNameInput").value || "").trim();
+            const slug = salonNameToSlug(salonName);
+            const phone = (document.getElementById("salonPhoneInput").value || "").trim();
+            const city = (document.getElementById("salonCityInput").value || "").trim();
+            const address = (document.getElementById("salonAddressInput").value || "").trim();
+            const openingHours = (document.getElementById("salonHoursInput").value || "").trim();
+
+            if (!salonName || !slug) {
+                showStatus("Please enter a valid Salon Name (letters or numbers).", true);
+                return;
+            }
+
+            const saveBtn = document.getElementById("saveSettingsBtn");
+            saveBtn.disabled = true;
+            saveBtn.innerText = "Saving...";
+
+            try {
+                currentSalonSlug = slug;
+                sessionStorage.setItem("activeSalonId", slug);
+                localStorage.setItem("activeSalonId", slug);
+                localStorage.setItem("currentSalonSlug", slug);
+                localStorage.setItem("salonName", salonName);
+
+                await setDoc(
+                    getSalonDocRef(slug),
+                    {
+                        salonId: slug,
+                        salonName,
+                        phone,
+                        city,
+                        address,
+                        openingHours,
+                        ownerUid: currentAdminUser.uid,
+                        ownerEmail: (currentAdminUser.email || "").toLowerCase(),
+                        updatedAt: serverTimestamp()
+                    },
+                    { merge: true }
+                );
+
+                if (currentAdminUser.email) {
+                    await setDoc(
+                        getSalonDocRef(currentAdminUser.email.toLowerCase()),
+                        {
+                            linkedSalonSlug: slug,
+                            salonName,
+                            ownerUid: currentAdminUser.uid,
+                            ownerEmail: currentAdminUser.email.toLowerCase(),
+                            updatedAt: serverTimestamp()
+                        },
+                        { merge: true }
+                    ).catch(() => {});
+                }
+
+                refreshSlugPreview();
+                showStatus("Salon Name & Customer Link saved! Customer URL slug: " + slug);
+            } catch (err) {
+                console.error("Save salon settings error:", err);
+                showStatus("Failed to save settings: " + err.message, true);
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.innerText = "Save Salon Settings";
+            }
+        };
+
+        onAuthStateChanged(auth, async (user) => {
+            if (!user) {
+                window.location.replace("index.html");
+                return;
+            }
+            currentAdminUser = user;
+
+            const params = new URLSearchParams(window.location.search);
+            let resolvedSlug =
+                normalizeSalonId(params.get("salon")) ||
+                normalizeSalonId(sessionStorage.getItem("activeSalonId")) ||
+                normalizeSalonId(localStorage.getItem("currentSalonSlug")) ||
+                normalizeSalonId(localStorage.getItem("activeSalonId"));
+
+            if (user.email) {
+                try {
+                    const emailDoc = await getDoc(getSalonDocRef(user.email.toLowerCase()));
+                    if (emailDoc.exists() && emailDoc.data()?.linkedSalonSlug) {
+                        resolvedSlug = normalizeSalonId(emailDoc.data().linkedSalonSlug) || resolvedSlug;
+                    }
+                } catch (_) {}
+            }
+
+            if (resolvedSlug) {
+                sessionStorage.setItem("activeSalonId", resolvedSlug);
+                localStorage.setItem("activeSalonId", resolvedSlug);
+                localStorage.setItem("currentSalonSlug", resolvedSlug);
+                await loadSalonSettings(resolvedSlug);
+            } else {
+                const fallbackName = localStorage.getItem("salonName") || user.email?.split("@")[0] || "My Salon";
+                document.getElementById("salonNameInput").value = fallbackName;
+                refreshSlugPreview();
+            }
+        });
+    </script>
+</head>
+<body class="bg-gray-50 font-sans text-gray-800 p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto space-y-6">
+
+        <header class="bg-indigo-600 text-white p-6 rounded-3xl shadow-md flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <a data-admin-nav="dashboard.html" href="dashboard.html" class="bg-white/20 hover:bg-white/30 text-white p-2.5 rounded-xl transition">
+                    <i class="fa-solid fa-arrow-left text-sm"></i>
+                </a>
+                <div>
+                    <h1 class="text-xl font-bold">Control & Settings</h1>
+                    <p class="text-xs text-indigo-200 mt-0.5">Manage all salon configurations, banners & modules</p>
+                </div>
+            </div>
+            <a data-admin-nav="dashboard.html" href="dashboard.html" class="bg-white text-indigo-700 px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-indigo-50 transition">
+                Dashboard
+            </a>
+        </header>
+
+        <section class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+                <h2 class="text-sm font-bold text-gray-900">Customer Booking Link</h2>
+                <span class="text-[11px] font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-600">
+                    Salon Slug: <span id="salonSlugPreview">your-salon-name</span>
+                </span>
+            </div>
+            <p class="text-xs text-gray-400">
+                Share this link with customers. They will login or register first and book under your salon name.
+            </p>
+            <div class="flex gap-2">
+                <input
+                    id="customerLinkInput"
+                    type="text"
+                    readonly
+                    class="flex-1 px-3.5 py-2.5 text-xs bg-gray-50 border border-gray-200 rounded-xl text-gray-700 font-medium"
+                >
+                <button
+                    id="copyLinkBtn"
+                    type="button"
+                    onclick="copyCustomerLink()"
+                    class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition shrink-0"
+                >
+                    <i class="fa-regular fa-copy mr-1"></i> Copy
+                </button>
+            </div>
+        </section>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+            <a data-admin-nav="services.html" href="services.html" class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-indigo-300 hover:shadow-md transition flex items-center justify-between group">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center text-lg font-bold group-hover:bg-indigo-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-scissors"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-gray-900">Manage Services</h3>
+                        <p class="text-xs text-gray-400 mt-0.5">Add, edit pricing, time & service details</p>
+                    </div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-gray-300 group-hover:text-indigo-600 transition"></i>
+            </a>
+
+            <a data-admin-nav="categories.html" href="categories.html" class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-indigo-300 hover:shadow-md transition flex items-center justify-between group">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 bg-purple-50 text-purple-600 rounded-2xl flex items-center justify-center text-lg font-bold group-hover:bg-purple-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-layer-group"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-gray-900">Manage Categories</h3>
+                        <p class="text-xs text-gray-400 mt-0.5">Add categories with PNG icons</p>
+                    </div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-gray-300 group-hover:text-purple-600 transition"></i>
+            </a>
+
+            <a data-admin-nav="banners.html" href="banners.html" class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-indigo-300 hover:shadow-md transition flex items-center justify-between group">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 bg-pink-50 text-pink-600 rounded-2xl flex items-center justify-center text-lg font-bold group-hover:bg-pink-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-images"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-gray-900">Manage Banners & Sliders</h3>
+                        <p class="text-xs text-gray-400 mt-0.5">Add slider images, offers & titles</p>
+                    </div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-gray-300 group-hover:text-pink-600 transition"></i>
+            </a>
+
+            <a data-admin-nav="announcements.html" href="announcements.html" class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-indigo-300 hover:shadow-md transition flex items-center justify-between group">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-lg font-bold group-hover:bg-blue-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-bullhorn"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-gray-900">Manage Announcements</h3>
+                        <p class="text-xs text-gray-400 mt-0.5">Publish alerts & festival updates</p>
+                    </div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-gray-300 group-hover:text-blue-600 transition"></i>
+            </a>
+
+            <a data-admin-nav="payment.html" href="payment.html" class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-indigo-300 hover:shadow-md transition flex items-center justify-between group">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 bg-green-50 text-green-600 rounded-2xl flex items-center justify-center text-lg font-bold group-hover:bg-green-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-wallet"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-gray-900">Manage Payment & UPI</h3>
+                        <p class="text-xs text-gray-400 mt-0.5">Update UPI ID & collection QR</p>
+                    </div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-gray-300 group-hover:text-green-600 transition"></i>
+            </a>
+
+            <a data-admin-nav="dashboard.html" href="dashboard.html" class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-indigo-300 hover:shadow-md transition flex items-center justify-between group">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center text-lg font-bold group-hover:bg-amber-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-clock-rotate-left"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-gray-900">Manage Booking Status</h3>
+                        <p class="text-xs text-gray-400 mt-0.5">Approve or reject appointments</p>
+                    </div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-gray-300 group-hover:text-amber-600 transition"></i>
+            </a>
+
+        </div>
+
+        <form onsubmit="saveSalonSettings(event)" class="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm space-y-4">
+            <div>
+                <h2 class="text-base font-bold text-gray-900">Salon Name & Profile</h2>
+                <p class="text-xs text-gray-400 mt-0.5">Your Salon Name creates a clean URL slug so customers don't see email IDs.</p>
+            </div>
+
+            <div id="settingsStatusBox" class="hidden"></div>
+
+            <div>
+                <label class="block text-xs font-bold text-gray-700 mb-1">Salon Name *</label>
+                <input
+                    id="salonNameInput"
+                    type="text"
+                    required
+                    oninput="onSalonNameChange()"
+                    placeholder="e.g. Royal Look Salon"
+                    class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
+                >
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-bold text-gray-700 mb-1">Contact Phone</label>
+                    <input
+                        id="salonPhoneInput"
+                        type="tel"
+                        placeholder="10-digit mobile number"
+                        class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
+                    >
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-700 mb-1">City / Region</label>
+                    <input
+                        id="salonCityInput"
+                        type="text"
+                        placeholder="e.g. Raigarh, Chhattisgarh"
+                        class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
+                    >
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-xs font-bold text-gray-700 mb-1">Address</label>
+                    <input
+                        id="salonAddressInput"
+                        type="text"
+                        placeholder="Street, area, landmark"
+                        class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
+                    >
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-gray-700 mb-1">Opening Hours</label>
+                    <input
+                        id="salonHoursInput"
+                        type="text"
+                        placeholder="e.g. Mon - Sun, 9:00 AM - 9:00 PM"
+                        class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
+                    >
+                </div>
+            </div>
+
+            <button
+                id="saveSettingsBtn"
+                type="submit"
+                class="w-full md:w-auto px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md transition"
+            >
+                Save Salon Settings
+            </button>
+        </form>
+
+    </div>
+
+</body>
+</html>

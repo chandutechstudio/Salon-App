@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salon Admin - Manage Services & Time Slots</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <script type="module">
+        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { addDoc, getDoc, getDocs, deleteDoc, updateDoc, doc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { db, normalizeSalonId, getSalonDocRef, getSalonSubcollectionRef } from "./tenant.js";
+
+        const auth = getAuth();
+        let salonId = "";
+
+        async function resolveSyncedSalonId(user) {
+            const params = new URLSearchParams(window.location.search);
+            let slug = normalizeSalonId(
+                params.get("salon") ||
+                sessionStorage.getItem("activeSalonId") ||
+                localStorage.getItem("currentSalonSlug") ||
+                localStorage.getItem("activeSalonId") ||
+                ""
+            );
+
+            const emailKey = (user?.email || localStorage.getItem("adminEmail") || "").trim().toLowerCase();
+            const emailSlug = normalizeSalonId(emailKey);
+
+            if (emailSlug) {
+                try {
+                    const emailDoc = await getDoc(getSalonDocRef(emailSlug));
+                    if (emailDoc.exists() && emailDoc.data()?.linkedSalonSlug) {
+                        slug = normalizeSalonId(emailDoc.data().linkedSalonSlug) || slug;
+                    }
+                } catch (_) {}
+            }
+
+            if (!slug && emailSlug) slug = emailSlug;
+
+            if (slug) {
+                sessionStorage.setItem("activeSalonId", slug);
+                localStorage.setItem("activeSalonId", slug);
+                localStorage.setItem("currentSalonSlug", slug);
+            }
+            return slug;
+        }
+
+        function getServicesRef() {
+            return getSalonSubcollectionRef(salonId, "services");
+        }
+
+        function getTimeSlotsRef() {
+            return getSalonSubcollectionRef(salonId, "timeSlots");
+        }
+
+        async function loadCategoriesDropdown() {
+            const selectEl = document.getElementById("srvCategory");
+            try {
+                const snap = await getDocs(getSalonSubcollectionRef(salonId, "categories"));
+                const cats = [];
+                snap.forEach((d) => {
+                    const name = String(d.data().name || "").trim();
+                    if (name && !cats.some((x) => x.toLowerCase() === name.toLowerCase())) {
+                        cats.push(name);
+                    }
+                });
+
+                if (cats.length > 0) {
+                    selectEl.innerHTML = cats.map((c) => `<option value="${c}">${c}</option>`).join("");
+                }
+            } catch (err) {
+                console.error("Category dropdown error:", err);
+            }
+        }
+
+        async function loadServicesFromCloud() {
+            const container = document.getElementById("serviceListContainer");
+            container.innerHTML = `<p class="text-xs text-gray-400 text-center py-8">Loading services from cloud...</p>`;
+            
+            try {
+                const querySnapshot = await getDocs(getServicesRef());
+                let html = "";
+                let count = 0;
+
+                querySnapshot.forEach((document) => {
+                    count++;
+                    const s = document.data();
+                    const docId = document.id;
+
+                    html += `
+                        <div class="flex items-center justify-between p-3.5 bg-gray-50 border border-gray-100 rounded-2xl">
+                            <div class="flex items-center gap-3 min-w-0">
+                                <img src="${s.image || 'https://cdn-icons-png.flaticon.com/512/3067/3067451.png'}" class="w-10 h-10 object-contain bg-white p-1.5 rounded-xl border shrink-0" alt="">
+                                <div class="min-w-0">
+                                    <span class="bg-indigo-100 text-indigo-700 text-[10px] font-bold px-2 py-0.5 rounded">${s.category || 'General'}</span>
+                                    <h4 class="font-bold text-xs text-gray-900 mt-1 truncate">${s.name}</h4>
+                                    <p class="text-[10px] text-gray-400"><i class="fa-solid fa-clock mr-1"></i> ${s.time}</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-3 shrink-0">
+                                <span class="font-bold text-xs text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-xl">₹${s.price}</span>
+                                <button onclick="deleteCloudService('${docId}')" class="text-red-400 hover:text-red-600 p-2 cursor-pointer" title="Delete Service"><i class="fa-solid fa-trash text-sm"></i></button>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                document.getElementById("serviceCountBadge").innerText = `${count} Services`;
+                container.innerHTML = html === "" ? `<p class="text-xs text-gray-400 text-center py-8">No services added yet.</p>` : html;
+            } catch (err) {
+                console.error(err);
+                container.innerHTML = `<p class="text-xs text-red-400 text-center py-8">Failed to load services from cloud.</p>`;
+            }
+        }
+
+        document.getElementById("serviceForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            if (!salonId) return;
+            const category = document.getElementById("srvCategory").value;
+            const name = document.getElementById("srvName").value.trim();
+            const price = document.getElementById("srvPrice").value.trim();
+            const time = document.getElementById("srvTime").value.trim();
+            const image = document.getElementById("srvImage").value.trim();
+
+            try {
+                await addDoc(getServicesRef(), {
+                    name,
+                    category,
+                    price,
+                    time,
+                    image,
+                    salonId,
+                    createdAt: new Date()
+                });
+                alert("Service added to your salon cloud successfully!");
+                document.getElementById("serviceForm").reset();
+                loadServicesFromCloud();
+            } catch (err) {
+                console.error(err);
+                alert("Error saving service to cloud.");
+            }
+        });
+
+        window.deleteCloudService = async function(docId) {
+            if (!salonId) return;
+            if (confirm("Are you sure you want to delete this service?")) {
+                try {
+                    await deleteDoc(doc(db, "salons", salonId, "services", docId));
+                    alert("Service deleted successfully!");
+                    loadServicesFromCloud();
+                } catch (err) {
+                    console.error(err);
+                    alert("Failed to delete service.");
+                }
+            }
+        };
+
+        function format24To12(time24) {
+            const [hStr, mStr] = String(time24 || "10:00").split(":");
+            let h = parseInt(hStr, 10);
+            const ampm = h >= 12 ? "PM" : "AM";
+            h = h % 12 || 12;
+            return `${String(h).padStart(2, "0")}:${mStr || "00"} ${ampm}`;
+        }
+
+        document.getElementById("slotForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            if (!salonId) return;
+            const btn = document.getElementById("addSlotBtn");
+            const time24 = document.getElementById("slotTimeInput").value.trim();
+            const tag = document.getElementById("slotTagInput").value.trim();
+
+            if (!time24) return;
+            btn.disabled = true;
+            btn.innerText = "Saving...";
+
+            try {
+                await addDoc(getTimeSlotsRef(), {
+                    value24: time24,
+                    label: format24To12(time24),
+                    tag,
+                    active: true,
+                    salonId,
+                    createdAt: new Date()
+                });
+                document.getElementById("slotForm").reset();
+                loadTimeSlotsFromCloud();
+            } catch (err) {
+                console.error(err);
+                alert("Failed to add time slot.");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Add Time Slot";
+            }
+        });
+
+        window.addDefaultSlots = async function() {
+            if (!salonId) return;
+            const btn = document.getElementById("defaultSlotsBtn");
+            if (btn) {
+                btn.disabled = true;
+                btn.innerText = "Adding...";
+            }
+            const defaults = ["10:00", "11:30", "13:00", "15:00", "17:00", "19:00"];
+            try {
+                for (const t of defaults) {
+                    await addDoc(getTimeSlotsRef(), {
+                        value24: t,
+                        label: format24To12(t),
+                        tag: "",
+                        active: true,
+                        salonId,
+                        createdAt: new Date()
+                    });
+                }
+                loadTimeSlotsFromCloud();
+            } catch (err) {
+                console.error(err);
+                alert("Failed to add default slots.");
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerText = "Add Default 6 Slots";
+                }
+            }
+        };
+
+        async function loadTimeSlotsFromCloud() {
+            const container = document.getElementById("slotsListContainer");
+            const badge = document.getElementById("slotCountBadge");
+            container.innerHTML = `<p class="text-xs text-gray-400 col-span-full text-center py-6">Loading time slots...</p>`;
+
+            try {
+                const snap = await getDocs(getTimeSlotsRef());
+                const items = [];
+                snap.forEach((d) => items.push({ id: d.id, ...d.data() }));
+                items.sort((a, b) => String(a.value24 || "").localeCompare(String(b.value24 || "")));
+
+                badge.innerText = `${items.length} Slots`;
+
+                if (items.length === 0) {
+                    container.innerHTML = `
+                        <div class="col-span-full text-center py-6 space-y-3 bg-gray-50 rounded-2xl border border-dashed border-gray-200 p-4">
+                            <p class="text-xs text-gray-500">No custom time slots added yet.</p>
+                            <button id="defaultSlotsBtn" type="button" onclick="addDefaultSlots()" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs px-4 py-2 rounded-xl transition cursor-pointer">
+                                Add Default 6 Slots
+                            </button>
+                        </div>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = items.map((s) => {
+                    const isActive = s.active !== false;
+                    return `
+                        <div class="p-3.5 rounded-2xl border ${isActive ? 'bg-gray-50 border-gray-100' : 'bg-red-50/40 border-red-100'} flex items-center justify-between gap-2">
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs font-extrabold ${isActive ? 'text-gray-900' : 'text-gray-400 line-through'}">${s.label || format24To12(s.value24)}</span>
+                                    <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${isActive ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}">
+                                        ${isActive ? 'Active' : 'Off'}
+                                    </span>
+                                </div>
+                                ${s.tag ? `<p class="text-[10px] text-indigo-600 font-medium mt-0.5 truncate">${s.tag}</p>` : ''}
+                            </div>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                                <button type="button" onclick="toggleTimeSlot('${s.id}', ${isActive})" class="px-2.5 py-1.5 rounded-xl text-[10px] font-bold transition cursor-pointer ${isActive ? 'bg-amber-100 text-amber-800 hover:bg-amber-200' : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'}">
+                                    ${isActive ? 'Disable' : 'Enable'}
+                                </button>
+                                <button type="button" onclick="deleteTimeSlot('${s.id}')" class="w-7 h-7 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 flex items-center justify-center transition cursor-pointer" title="Delete Slot">
+                                    <i class="fa-solid fa-trash text-[11px]"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join("");
+            } catch (err) {
+                console.error(err);
+                container.innerHTML = `<p class="text-xs text-red-400 col-span-full text-center py-6">Failed to load time slots.</p>`;
+            }
+        }
+
+        window.toggleTimeSlot = async function(id, currentActive) {
+            if (!salonId) return;
+            try {
+                await updateDoc(doc(db, "salons", salonId, "timeSlots", id), { active: !currentActive });
+                loadTimeSlotsFromCloud();
+            } catch (err) {
+                console.error(err);
+                alert("Failed to update slot status.");
+            }
+        };
+
+        window.deleteTimeSlot = async function(id) {
+            if (!salonId || !confirm("Delete this time slot?")) return;
+            try {
+                await deleteDoc(doc(db, "salons", salonId, "timeSlots", id));
+                loadTimeSlotsFromCloud();
+            } catch (err) {
+                console.error(err);
+                alert("Failed to delete slot.");
+            }
+        };
+
+        onAuthStateChanged(auth, async (user) => {
+            if (!user && localStorage.getItem("isAdminLoggedIn") !== "true") {
+                window.location.href = "index.html";
+                return;
+            }
+            salonId = await resolveSyncedSalonId(user);
+            if (!salonId) {
+                window.location.href = "index.html";
+                return;
+            }
+            document.getElementById("activeSlugHeader").innerText = `Salon: ${salonId}`;
+            loadCategoriesDropdown();
+            loadServicesFromCloud();
+            loadTimeSlotsFromCloud();
+        });
+    </script>
+</head>
+<body class="bg-gray-50 font-sans text-gray-800 p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto space-y-6">
+        
+        <header class="bg-indigo-600 text-white p-6 rounded-3xl shadow-md flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <a href="settings.html" class="bg-white/20 hover:bg-white/30 text-white p-2.5 rounded-xl transition"><i class="fa-solid fa-arrow-left text-sm"></i></a>
+                <div>
+                    <h1 class="text-xl font-bold">Manage Services & Slots (Cloud)</h1>
+                    <p class="text-xs text-indigo-200 mt-0.5"><span id="activeSlugHeader">Syncing salon...</span></p>
+                </div>
+            </div>
+            <a href="dashboard.html" class="bg-white text-indigo-700 px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-indigo-50 transition">Dashboard</a>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            
+            <div class="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm space-y-4 md:col-span-1">
+                <h3 class="font-bold text-base text-gray-900 border-b pb-2"><i class="fa-solid fa-circle-plus text-indigo-600 mr-1"></i> Add New Service</h3>
+                <form id="serviceForm" class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Select Category</label>
+                        <select id="srvCategory" required class="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+                            <option value="Haircut">Haircut</option>
+                            <option value="Facial">Facial</option>
+                            <option value="Spa">Spa</option>
+                            <option value="Groom">Groom</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Service Title</label>
+                        <input type="text" id="srvName" required class="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500" placeholder="e.g., Advanced Hair Styling">
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Price (₹)</label>
+                            <input type="number" id="srvPrice" required class="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500" placeholder="299">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-600 mb-1">Duration / Time</label>
+                            <input type="text" id="srvTime" required class="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500" placeholder="45 mins">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-600 mb-1">Service Image / Icon URL</label>
+                        <input type="url" id="srvImage" required class="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Paste image link here">
+                    </div>
+                    <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl text-xs transition shadow-lg shadow-indigo-100 cursor-pointer">Save Service to Cloud</button>
+                </form>
+            </div>
+
+            <div class="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm space-y-4 md:col-span-2">
+                <div class="flex justify-between items-center border-b pb-2">
+                    <h3 class="font-bold text-base text-gray-900"><i class="fa-solid fa-scissors text-indigo-600 mr-1"></i> Cloud Services List</h3>
+                    <span id="serviceCountBadge" class="bg-indigo-50 text-indigo-700 text-xs font-bold px-3 py-1 rounded-full">0 Services</span>
+                </div>
+
+                <div id="serviceListContainer" class="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                    <p class="text-xs text-gray-400 text-center py-8">Loading services from cloud...</p>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm space-y-5">
+            <div class="flex justify-between items-center border-b pb-3">
+                <h3 class="font-bold text-base text-gray-900"><i class="fa-solid fa-clock text-indigo-600 mr-1.5"></i> Manage Appointment Time Slots</h3>
+                <span id="slotCountBadge" class="bg-indigo-50 text-indigo-700 text-xs font-bold px-3 py-1 rounded-full">0 Slots</span>
+            </div>
+
+            <form id="slotForm" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                    <label for="slotTimeInput" class="block text-xs font-semibold text-gray-600 mb-1">Select Slot Time</label>
+                    <input type="time" id="slotTimeInput" required class="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-semibold outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label for="slotTagInput" class="block text-xs font-semibold text-gray-600 mb-1">Optional Note / Label</label>
+                    <input type="text" id="slotTagInput" placeholder="e.g., Morning, Evening" class="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+                <div class="flex items-end">
+                    <button id="addSlotBtn" type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-xl text-xs transition shadow-md cursor-pointer">
+                        Add Time Slot
+                    </button>
+                </div>
+            </form>
+
+            <div id="slotsListContainer" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                <p class="text-xs text-gray-400 col-span-full text-center py-4">Loading time slots...</p>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>
