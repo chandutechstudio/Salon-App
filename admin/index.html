@@ -9,23 +9,16 @@
     <style>.hide { display: none !important; }</style>
 
     <script type="module">
-        import { doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { db, salonNameToSlug, normalizeSalonId, getSalonDocRef } from "./tenant.js";
-
-        const auth = getAuth();
+        import { getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { auth, salonNameToSlug, normalizeSalonId, getSalonDocRef, getSubscriptionDocRef } from "./tenant.js";
 
         function saveAdminSession(salonSlug, ownerEmail, salonName = "") {
-            localStorage.setItem("isAdminLoggedIn", "true");
-            localStorage.setItem("activeSalonId", salonSlug);
-            localStorage.setItem("currentSalonSlug", salonSlug);
-            localStorage.setItem("adminEmail", ownerEmail);
-            localStorage.setItem("salonUserPhone", ownerEmail);
-            if (salonName) {
-                localStorage.setItem("salonName", salonName);
-                localStorage.setItem("adminUsername", salonName);
-            }
             sessionStorage.setItem("activeSalonId", salonSlug);
+            sessionStorage.setItem("adminEmail", ownerEmail);
+            if (salonName) {
+                sessionStorage.setItem("salonName", salonName);
+            }
         }
 
         window.switchView = function(viewName) {
@@ -123,7 +116,7 @@
             try {
                 const cred = await createUserWithEmailAndPassword(auth, ownerEmail, pass);
 
-                await setDoc(doc(db, "subscriptions", salonSlug), {
+                await setDoc(getSubscriptionDocRef(salonSlug), {
                     salonId: salonSlug,
                     salonName,
                     ownerEmail,
@@ -150,7 +143,6 @@
                 }, { merge: true });
 
                 saveAdminSession(salonSlug, ownerEmail, salonName);
-                alert("Account created successfully! Welcome to your Salon Admin.");
                 window.location.href = `subscription.html?salon=${encodeURIComponent(salonSlug)}`;
             } catch (error) {
                 console.error("Signup Error:", error);
@@ -247,7 +239,7 @@
                 <input type="password" id="signupPass" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="••••••••">
             </div>
             <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm">Register & Get Free Trial</button>
-            
+
             <p class="text-center text-xs text-gray-500 pt-1">
                 Already have an account? <button type="button" onclick="switchView('login')" class="text-indigo-600 font-bold hover:underline">Login here</button>
             </p>
@@ -259,7 +251,7 @@
                 <input type="email" id="forgetEmail" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="owner@salon.com">
             </div>
             <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm">Send Recovery Email</button>
-            
+
             <p class="text-center text-xs text-gray-500 pt-1">
                 Remember credentials? <button type="button" onclick="switchView('login')" class="text-indigo-600 font-bold hover:underline">Back to Login</button>
             </p>
