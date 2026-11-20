@@ -6,26 +6,24 @@
     <title>Salon Admin - Manage Announcements</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
-    <script type="module">
-        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { addDoc, getDoc, getDocs, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { db, normalizeSalonId, getSalonDocRef, getSalonSubcollectionRef } from "./tenant.js";
 
-        const auth = getAuth();
+    <script type="module">
+        import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { addDoc, getDoc, deleteDoc, doc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { auth, db, normalizeSalonId, getSalonDocRef, getSalonSubcollectionRef } from "./tenant.js";
+
         let salonId = "";
+        let unsubscribeAnn = null;
 
         async function resolveSyncedSalonId(user) {
             const params = new URLSearchParams(window.location.search);
             let slug = normalizeSalonId(
                 params.get("salon") ||
                 sessionStorage.getItem("activeSalonId") ||
-                localStorage.getItem("currentSalonSlug") ||
-                localStorage.getItem("activeSalonId") ||
                 ""
             );
 
-            const emailKey = (user?.email || localStorage.getItem("adminEmail") || "").trim().toLowerCase();
+            const emailKey = (user?.email || sessionStorage.getItem("adminEmail") || "").trim().toLowerCase();
             const emailSlug = normalizeSalonId(emailKey);
 
             if (emailSlug) {
@@ -41,14 +39,40 @@
 
             if (slug) {
                 sessionStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("currentSalonSlug", slug);
             }
             return slug;
         }
 
         function getAnnouncementsRef() {
             return getSalonSubcollectionRef(salonId, "announcements");
+        }
+
+        function listenAnnouncements() {
+            if (unsubscribeAnn) unsubscribeAnn();
+            unsubscribeAnn = onSnapshot(getAnnouncementsRef(), (snapshot) => {
+                const container = document.getElementById("announcementList");
+                let html = "";
+                snapshot.forEach((item) => {
+                    const a = item.data();
+                    html += `
+                        <div class="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between gap-4">
+                            <div class="flex items-center gap-3">
+                                <div class="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-base shrink-0">
+                                    <i class="fa-solid fa-bullhorn"></i>
+                                </div>
+                                <div>
+                                    <h4 class="text-xs font-bold text-gray-900 uppercase">${a.title || "Announcement"}</h4>
+                                    <p class="text-xs text-gray-500 mt-0.5">${a.message}</p>
+                                </div>
+                            </div>
+                            <button onclick="deleteAnnouncement('${item.id}')" class="bg-red-50 hover:bg-red-100 text-red-600 p-2.5 rounded-xl text-xs transition shrink-0 cursor-pointer" title="Delete">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html === "" ? `<p class="text-xs text-gray-400 text-center py-4">No active announcements.</p>` : html;
+            });
         }
 
         document.getElementById("announcementForm").addEventListener("submit", async (e) => {
@@ -62,13 +86,12 @@
                 title: document.getElementById("annTitle").value.trim(),
                 message: document.getElementById("annMessage").value.trim(),
                 salonId,
-                createdAt: new Date()
+                createdAt: serverTimestamp()
             };
 
             try {
                 await addDoc(getAnnouncementsRef(), data);
                 document.getElementById("announcementForm").reset();
-                loadAnnouncements();
             } catch (err) {
                 alert("Error: " + err.message);
             } finally {
@@ -77,50 +100,17 @@
             }
         });
 
-        async function loadAnnouncements() {
-            const container = document.getElementById("announcementList");
-            container.innerHTML = `<p class="text-xs text-gray-400 text-center py-4">Loading announcements...</p>`;
-
-            try {
-                const snapshot = await getDocs(getAnnouncementsRef());
-                let html = "";
-                snapshot.forEach((item) => {
-                    const a = item.data();
-                    html += `
-                        <div class="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex items-center justify-between gap-4">
-                            <div class="flex items-center gap-3">
-                                <div class="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-base shrink-0">
-                                    <i class="fa-solid fa-bullhorn"></i>
-                                </div>
-                                <div>
-                                    <h4 class="text-xs font-bold text-gray-900 uppercase">${a.title || 'Announcement'}</h4>
-                                    <p class="text-xs text-gray-500 mt-0.5">${a.message}</p>
-                                </div>
-                            </div>
-                            <button onclick="deleteAnnouncement('${item.id}')" class="bg-red-50 hover:bg-red-100 text-red-600 p-2.5 rounded-xl text-xs transition shrink-0 cursor-pointer" title="Delete">
-                                <i class="fa-solid fa-trash"></i>
-                            </button>
-                        </div>
-                    `;
-                });
-                container.innerHTML = html === "" ? `<p class="text-xs text-gray-400 text-center py-4">No active announcements.</p>` : html;
-            } catch (err) {
-                container.innerHTML = `<p class="text-xs text-red-500 text-center">Failed to load announcements.</p>`;
-            }
-        }
-
         window.deleteAnnouncement = async function(id) {
             if (!salonId || !confirm("Delete this announcement?")) return;
             try {
                 await deleteDoc(doc(db, "salons", salonId, "announcements", id));
-                loadAnnouncements();
             } catch (err) {
                 alert("Error deleting: " + err.message);
             }
         };
 
         onAuthStateChanged(auth, async (user) => {
-            if (!user && localStorage.getItem("isAdminLoggedIn") !== "true") {
+            if (!user) {
                 window.location.href = "index.html";
                 return;
             }
@@ -130,14 +120,14 @@
                 return;
             }
             document.getElementById("activeSlugHeader").innerText = `Salon: ${salonId}`;
-            loadAnnouncements();
+            listenAnnouncements();
         });
     </script>
 </head>
 <body class="bg-gray-50 font-sans text-gray-800 p-4 md:p-8">
 
     <div class="max-w-4xl mx-auto space-y-6">
-        
+
         <header class="bg-blue-600 text-white p-6 rounded-3xl shadow-md flex justify-between items-center">
             <div class="flex items-center gap-3">
                 <a href="settings.html" class="bg-white/20 hover:bg-white/30 text-white p-2.5 rounded-xl transition"><i class="fa-solid fa-arrow-left text-sm"></i></a>
