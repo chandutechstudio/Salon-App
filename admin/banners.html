@@ -6,26 +6,24 @@
     <title>Salon Admin - Manage Banners & Sliders</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
-    <script type="module">
-        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { addDoc, getDoc, getDocs, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { db, normalizeSalonId, getSalonDocRef, getSalonSubcollectionRef } from "./tenant.js";
 
-        const auth = getAuth();
+    <script type="module">
+        import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { addDoc, getDoc, deleteDoc, doc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { auth, db, normalizeSalonId, getSalonDocRef, getSalonSubcollectionRef } from "./tenant.js";
+
         let salonId = "";
+        let unsubscribeBanners = null;
 
         async function resolveSyncedSalonId(user) {
             const params = new URLSearchParams(window.location.search);
             let slug = normalizeSalonId(
                 params.get("salon") ||
                 sessionStorage.getItem("activeSalonId") ||
-                localStorage.getItem("currentSalonSlug") ||
-                localStorage.getItem("activeSalonId") ||
                 ""
             );
 
-            const emailKey = (user?.email || localStorage.getItem("adminEmail") || "").trim().toLowerCase();
+            const emailKey = (user?.email || sessionStorage.getItem("adminEmail") || "").trim().toLowerCase();
             const emailSlug = normalizeSalonId(emailKey);
 
             if (emailSlug) {
@@ -41,14 +39,47 @@
 
             if (slug) {
                 sessionStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("currentSalonSlug", slug);
             }
             return slug;
         }
 
         function getBannersRef() {
             return getSalonSubcollectionRef(salonId, "banners");
+        }
+
+        function listenBanners() {
+            if (unsubscribeBanners) unsubscribeBanners();
+            unsubscribeBanners = onSnapshot(getBannersRef(), (snapshot) => {
+                const container = document.getElementById("bannerList");
+                let html = "";
+                snapshot.forEach((item) => {
+                    const b = item.data();
+                    const hasTag = Boolean(b.tag && String(b.tag).trim() !== "");
+                    const hasTitle = Boolean(b.title && String(b.title).trim() !== "");
+                    const hasSubtitle = Boolean(b.subtitle && String(b.subtitle).trim() !== "");
+                    const hasAnyText = hasTag || hasTitle || hasSubtitle;
+
+                    html += `
+                        <div class="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col justify-between gap-4">
+                            <div class="h-32 rounded-2xl p-4 text-white flex items-center relative overflow-hidden" style="background: linear-gradient(135deg, ${b.bgColor || "#4f46e5"}, ${b.bgColor2 || "#9333ea"});">
+                                ${b.image ? `<img src="${b.image}" class="absolute inset-0 w-full h-full object-cover object-center z-0" alt="Banner">` : ""}
+                                ${hasAnyText ? `
+                                    <div class="w-4/5 space-y-1 relative z-10">
+                                        ${hasTag ? `<span class="inline-block bg-white/25 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase">${b.tag}</span>` : ""}
+                                        ${hasTitle ? `<h4 class="text-sm font-bold leading-tight">${b.title}</h4>` : ""}
+                                        ${hasSubtitle ? `<p class="text-[10px] text-white/95 truncate">${b.subtitle}</p>` : ""}
+                                    </div>
+                                ` : ""}
+                            </div>
+
+                            <button onclick="deleteBanner('${item.id}')" class="w-full bg-red-50 hover:bg-red-100 text-red-600 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer">
+                                <i class="fa-solid fa-trash"></i> Delete Banner
+                            </button>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html === "" ? `<p class="text-xs text-gray-400 col-span-2 text-center py-6">No banners added yet.</p>` : html;
+            });
         }
 
         document.getElementById("bannerForm").addEventListener("submit", async (e) => {
@@ -66,13 +97,12 @@
                 bgColor: document.getElementById("bgColor1").value,
                 bgColor2: document.getElementById("bgColor2").value,
                 salonId,
-                createdAt: new Date()
+                createdAt: serverTimestamp()
             };
 
             try {
                 await addDoc(getBannersRef(), bannerData);
                 document.getElementById("bannerForm").reset();
-                loadBanners();
             } catch (err) {
                 alert("Error adding banner: " + err.message);
             } finally {
@@ -81,57 +111,17 @@
             }
         });
 
-        async function loadBanners() {
-            const container = document.getElementById("bannerList");
-            container.innerHTML = `<p class="text-xs text-gray-400 text-center py-6">Loading active banners...</p>`;
-
-            try {
-                const snapshot = await getDocs(getBannersRef());
-                let html = "";
-                snapshot.forEach((item) => {
-                    const b = item.data();
-                    const hasTag = Boolean(b.tag && String(b.tag).trim() !== "");
-                    const hasTitle = Boolean(b.title && String(b.title).trim() !== "");
-                    const hasSubtitle = Boolean(b.subtitle && String(b.subtitle).trim() !== "");
-                    const hasAnyText = hasTag || hasTitle || hasSubtitle;
-
-                    html += `
-                        <div class="bg-white p-4 rounded-3xl border border-gray-100 shadow-sm flex flex-col justify-between gap-4">
-                            <div class="h-32 rounded-2xl p-4 text-white flex items-center relative overflow-hidden" style="background: linear-gradient(135deg, ${b.bgColor || '#4f46e5'}, ${b.bgColor2 || '#9333ea'});">
-                                ${b.image ? `<img src="${b.image}" class="absolute inset-0 w-full h-full object-cover object-center z-0" alt="Banner">` : ''}
-                                ${hasAnyText ? `
-                                    <div class="w-4/5 space-y-1 relative z-10">
-                                        ${hasTag ? `<span class="inline-block bg-white/25 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase">${b.tag}</span>` : ''}
-                                        ${hasTitle ? `<h4 class="text-sm font-bold leading-tight">${b.title}</h4>` : ''}
-                                        ${hasSubtitle ? `<p class="text-[10px] text-white/95 truncate">${b.subtitle}</p>` : ''}
-                                    </div>
-                                ` : ''}
-                            </div>
-                            
-                            <button onclick="deleteBanner('${item.id}')" class="w-full bg-red-50 hover:bg-red-100 text-red-600 font-bold py-2.5 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer">
-                                <i class="fa-solid fa-trash"></i> Delete Banner
-                            </button>
-                        </div>
-                    `;
-                });
-                container.innerHTML = html === "" ? `<p class="text-xs text-gray-400 col-span-2 text-center py-6">No banners added yet.</p>` : html;
-            } catch (err) {
-                container.innerHTML = `<p class="text-xs text-red-500 text-center">Failed to load banners.</p>`;
-            }
-        }
-
         window.deleteBanner = async function(id) {
             if (!salonId || !confirm("Are you sure you want to delete this banner?")) return;
             try {
                 await deleteDoc(doc(db, "salons", salonId, "banners", id));
-                loadBanners();
             } catch (err) {
                 alert("Error deleting banner: " + err.message);
             }
         };
 
         onAuthStateChanged(auth, async (user) => {
-            if (!user && localStorage.getItem("isAdminLoggedIn") !== "true") {
+            if (!user) {
                 window.location.href = "index.html";
                 return;
             }
@@ -141,14 +131,14 @@
                 return;
             }
             document.getElementById("activeSlugHeader").innerText = `Salon: ${salonId}`;
-            loadBanners();
+            listenBanners();
         });
     </script>
 </head>
 <body class="bg-gray-50 font-sans text-gray-800 p-4 md:p-8">
 
     <div class="max-w-4xl mx-auto space-y-6">
-        
+
         <header class="bg-indigo-600 text-white p-6 rounded-3xl shadow-md flex justify-between items-center">
             <div class="flex items-center gap-3">
                 <a href="settings.html" class="bg-white/20 hover:bg-white/30 text-white p-2.5 rounded-xl transition"><i class="fa-solid fa-arrow-left text-sm"></i></a>
