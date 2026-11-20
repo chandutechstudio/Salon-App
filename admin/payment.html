@@ -19,7 +19,7 @@
             toast.className = `fixed top-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 rounded-full shadow-xl text-xs font-bold transition-all ${
                 type === "error" ? "bg-rose-600 text-white" : "bg-slate-900 text-white"
             }`;
-            toast.innerHTML = `<i class="fa-solid ${type === 'error' ? 'fa-circle-exclamation' : 'fa-circle-check text-emerald-400'}"></i> <span>${message}</span>`;
+            toast.innerHTML = `<i class="fa-solid ${type === "error" ? "fa-circle-exclamation" : "fa-circle-check text-emerald-400"}"></i> <span>${message}</span>`;
             toast.classList.remove("hidden");
             setTimeout(() => toast.classList.add("hidden"), 3000);
         }
@@ -27,8 +27,8 @@
 
     <script type="module">
         import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { auth, db, normalizeSalonId, getSalonDocRef, getTenantStorageKey } from "./tenant.js";
+        import { getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { auth, normalizeSalonId, getSalonDocRef } from "./tenant.js";
 
         const OWNER_ZAPUPI_KEY = "Zapfba972d2f8d8d61bf40b15535d3e1424";
         const UNLOCK_AMOUNT = 100;
@@ -36,18 +36,17 @@
         let salonId = "";
         let currentQrSource = "";
         let isZapUnlocked = false;
+        let unsubscribePayment = null;
 
         async function resolveSyncedSalonId(user) {
             const params = new URLSearchParams(window.location.search);
             let slug = normalizeSalonId(
                 params.get("salon") ||
                 sessionStorage.getItem("activeSalonId") ||
-                localStorage.getItem("currentSalonSlug") ||
-                localStorage.getItem("activeSalonId") ||
                 ""
             );
 
-            const emailKey = (user?.email || localStorage.getItem("adminEmail") || "").trim().toLowerCase();
+            const emailKey = (user?.email || sessionStorage.getItem("adminEmail") || "").trim().toLowerCase();
             const emailSlug = normalizeSalonId(emailKey);
 
             if (emailSlug) {
@@ -63,8 +62,6 @@
 
             if (slug) {
                 sessionStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("currentSalonSlug", slug);
             }
             return slug;
         }
@@ -119,7 +116,7 @@
         }
 
         async function completeZapUnlockAfterReturn(orderIdFromUrl) {
-            const pendingOrder = localStorage.getItem(getTenantStorageKey(salonId, "pendingZapUnlockOrder")) || orderIdFromUrl || ("ZAPUNLOCK_" + Date.now());
+            const pendingOrder = sessionStorage.getItem("pendingZapUnlockOrder") || orderIdFromUrl || ("ZAPUNLOCK_" + Date.now());
             try {
                 await setDoc(getSalonDocRef(salonId), {
                     salonId,
@@ -131,10 +128,7 @@
                     zapGatewayStatus: "enabled"
                 }, { merge: true });
 
-                localStorage.setItem(getTenantStorageKey(salonId, "zapUnlocked"), "true");
-                localStorage.setItem(getTenantStorageKey(salonId, "zapGatewayStatus"), "enabled");
-                localStorage.removeItem(getTenantStorageKey(salonId, "pendingZapUnlockOrder"));
-
+                sessionStorage.removeItem("pendingZapUnlockOrder");
                 const cleanUrl = new URL(window.location.href);
                 cleanUrl.searchParams.delete("zap_unlock");
                 cleanUrl.searchParams.delete("order_id");
@@ -147,50 +141,34 @@
             }
         }
 
-        async function loadPaymentConfig() {
+        async function listenPaymentConfig() {
             const urlParams = new URLSearchParams(window.location.search);
             const orderIdParam = urlParams.get("order_id") || "";
-            const hasPendingOrder = Boolean(localStorage.getItem(getTenantStorageKey(salonId, "pendingZapUnlockOrder")));
+            const hasPendingOrder = Boolean(sessionStorage.getItem("pendingZapUnlockOrder"));
 
             if (urlParams.get("zap_unlock") === "success" || (orderIdParam && hasPendingOrder)) {
                 await completeZapUnlockAfterReturn(orderIdParam);
             }
 
-            const upiKey = getTenantStorageKey(salonId, "adminUpiId");
-            const qrKey = getTenantStorageKey(salonId, "adminQrUrl");
-            const zapApiKeyStorage = getTenantStorageKey(salonId, "zapApiKey");
-            const zapStatusStorage = getTenantStorageKey(salonId, "zapGatewayStatus");
-            const zapUnlockStorage = getTenantStorageKey(salonId, "zapUnlocked");
+            if (unsubscribePayment) unsubscribePayment();
+            unsubscribePayment = onSnapshot(getSalonDocRef(salonId), (snap) => {
+                if (!snap.exists()) return;
+                const data = snap.data();
+                const upiId = data.upiId || "";
+                const qrSource = data.qrCodeImage || data.qrCodeBase64 || data.qrUrl || "";
+                const unlocked = data.zapUnlocked === true;
+                const zapStatus = unlocked ? (data.zapGatewayStatus || "disabled") : "disabled";
+                const zapKey = data.zapApiKey || "";
 
-            let upiId = localStorage.getItem(upiKey) || "";
-            let qrSource = localStorage.getItem(qrKey) || "";
-            let zapStatus = localStorage.getItem(zapStatusStorage) || "disabled";
-            let zapKey = localStorage.getItem(zapApiKeyStorage) || "";
-            let unlocked = localStorage.getItem(zapUnlockStorage) === "true";
-
-            try {
-                const snap = await getDoc(getSalonDocRef(salonId));
-                if (snap.exists()) {
-                    const data = snap.data();
-                    upiId = data.upiId || upiId;
-                    qrSource = data.qrCodeImage || data.qrCodeBase64 || data.qrUrl || qrSource;
-                    unlocked = data.zapUnlocked === true;
-                    zapStatus = unlocked ? (data.zapGatewayStatus || "disabled") : "disabled";
-                    zapKey = data.zapApiKey || zapKey;
+                document.getElementById("adminUpiId").value = upiId;
+                if (qrSource && !qrSource.startsWith("data:image")) {
+                    document.getElementById("adminQrUrl").value = qrSource;
                 }
-            } catch (err) {
-                console.warn("Firestore read fallback:", err);
-            }
-
-            document.getElementById("adminUpiId").value = upiId;
-            if (qrSource && !qrSource.startsWith("data:image")) {
-                document.getElementById("adminQrUrl").value = qrSource;
-            }
-            renderQrPreview(qrSource);
-
-            renderZapLockState(unlocked);
-            document.getElementById("zapStatus").value = unlocked ? zapStatus : "disabled";
-            document.getElementById("zapApiKey").value = zapKey;
+                renderQrPreview(qrSource);
+                renderZapLockState(unlocked);
+                document.getElementById("zapStatus").value = zapStatus;
+                document.getElementById("zapApiKey").value = zapKey;
+            });
         }
 
         window.payOwnerViaZapUpi = async function() {
@@ -207,7 +185,7 @@
 
             try {
                 const orderId = "ZAPUNLOCK_" + Date.now();
-                localStorage.setItem(getTenantStorageKey(salonId, "pendingZapUnlockOrder"), orderId);
+                sessionStorage.setItem("pendingZapUnlockOrder", orderId);
 
                 const baseReturnUrl = new URL("payment.html", window.location.href);
                 baseReturnUrl.searchParams.set("salon", salonId);
@@ -218,7 +196,7 @@
                 failedReturnUrl.searchParams.set("salon", salonId);
                 failedReturnUrl.searchParams.set("zap_unlock", "failed");
 
-                const customerMobile = (auth.currentUser?.phoneNumber || localStorage.getItem("adminPhone") || "9999999999").replace(/\D/g, "").slice(-10) || "9999999999";
+                const customerMobile = (auth.currentUser?.phoneNumber || "9999999999").replace(/\D/g, "").slice(-10) || "9999999999";
 
                 const response = await fetch("https://pay.zapupi.com/api/create-order", {
                     method: "POST",
@@ -304,12 +282,11 @@
                     upiId,
                     qrCodeImage: finalQr,
                     qrCodeBase64: finalQr.startsWith("data:image") ? finalQr : "",
-                    qrUrl: !finalQr.startsWith("data:image") ? finalQr : ""
+                    qrUrl: !finalQr.startsWith("data:image") ? finalQr : "",
+                    updatedAt: serverTimestamp()
                 }, { merge: true });
 
-                localStorage.setItem(getTenantStorageKey(salonId, "adminUpiId"), upiId);
-                localStorage.setItem(getTenantStorageKey(salonId, "adminQrUrl"), finalQr);
-                showToast("Manual UPI & QR Code updated for your salon!");
+                showToast("Manual UPI & QR Code updated in Firestore!");
             } catch (err) {
                 console.error("Error saving UPI settings:", err);
                 showToast("Save karne mein error aaya.", "error");
@@ -344,12 +321,11 @@
                 await setDoc(getSalonDocRef(salonId), {
                     salonId,
                     zapGatewayStatus: status,
-                    zapApiKey: apiKey
+                    zapApiKey: apiKey,
+                    updatedAt: serverTimestamp()
                 }, { merge: true });
 
-                localStorage.setItem(getTenantStorageKey(salonId, "zapGatewayStatus"), status);
-                localStorage.setItem(getTenantStorageKey(salonId, "zapApiKey"), apiKey);
-                showToast("Zap UPI (Instant Automatic) configuration saved!");
+                showToast("Zap UPI (Instant Automatic) configuration saved in Firestore!");
             } catch (err) {
                 console.error("Error saving Zap config:", err);
                 showToast("Gateway config save nahi ho payi.", "error");
@@ -360,7 +336,7 @@
         });
 
         onAuthStateChanged(auth, async (user) => {
-            if (!user && localStorage.getItem("isAdminLoggedIn") !== "true") {
+            if (!user) {
                 window.location.href = "index.html";
                 return;
             }
@@ -370,7 +346,7 @@
                 return;
             }
             document.getElementById("activeTenantEmail").innerText = salonId;
-            await loadPaymentConfig();
+            await listenPaymentConfig();
         });
     </script>
 </head>
