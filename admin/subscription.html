@@ -14,9 +14,9 @@
 
         const ZAPUPI_KEY = "Zapfba972d2f8d8d61bf40b15535d3e1424";
 
-        let currentAmount = 100;
-        let currentPlanText = "1 Month Plan";
-        let currentPlanDays = 30;
+        let currentAmount = 0;
+        let currentPlanText = "7 Days Free Trial";
+        let currentPlanDays = 7;
         let salonId = "";
         let unsubscribeSub = null;
 
@@ -34,20 +34,22 @@
 
                 if (currentAmount === 0) {
                     const defaultCard = document.getElementById("defaultPlanCard");
-                    if (defaultCard) defaultCard.click();
+                    if (defaultCard) window.selectPlan(100, "1 Month Plan", 30, defaultCard);
                 }
             } else {
-                const trialCardEl = document.getElementById("freeTrialCard");
-                if (trialCardEl && currentAmount === 100 && currentPlanText === "1 Month Plan") {
-                    trialCardEl.click();
-                }
+                trialCard.classList.remove("opacity-50", "bg-gray-100", "border-gray-300", "cursor-not-allowed");
+                trialCard.classList.add("cursor-pointer");
+                trialInput.disabled = false;
+                trialText.innerHTML = `7 Days <span class="text-[10px] text-gray-500 font-normal">Free</span>`;
+                trialText.className = "text-sm font-black text-green-600 mt-2";
+                window.selectPlan(0, "7 Days Free Trial", 7, trialCard);
             }
         }
 
         function listenSubscriptionPage() {
             if (unsubscribeSub) unsubscribeSub();
             unsubscribeSub = onSnapshot(getSubscriptionDocRef(salonId), (docSnap) => {
-                const claimed = docSnap.exists() && docSnap.data().trialClaimed === true;
+                const claimed = docSnap.exists() && docSnap.data()?.trialClaimed === true;
                 applyTrialUiState(claimed);
             }, (error) => {
                 console.error("Error checking trial status:", error);
@@ -108,15 +110,15 @@
                 } else {
                     element.classList.remove("border-gray-200", "bg-white");
                     element.classList.add("border-green-500", "bg-green-50/50");
-                    proceedBtn.innerText = "Activate 7 Days Free Trial";
-                    proceedBtn.className = "w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl text-xs transition shadow-lg shadow-green-100 flex items-center justify-center gap-2";
+                    proceedBtn.innerHTML = `<i class="fa-solid fa-check"></i> Activate 7 Days Free Trial`;
+                    proceedBtn.className = "w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl text-xs transition shadow-lg shadow-green-100 flex items-center justify-center gap-2 cursor-pointer";
                     proceedBtn.disabled = false;
                 }
             } else {
                 element.classList.remove("border-gray-200", "bg-white");
                 element.classList.add("border-indigo-600", "bg-indigo-50/50");
                 proceedBtn.innerText = `Proceed to Pay ₹${amount} via ZapUPI`;
-                proceedBtn.className = "w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl text-xs transition shadow-lg shadow-indigo-100 flex items-center justify-center gap-2";
+                proceedBtn.className = "w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl text-xs transition shadow-lg shadow-indigo-100 flex items-center justify-center gap-2 cursor-pointer";
                 proceedBtn.disabled = false;
             }
 
@@ -125,10 +127,20 @@
         };
 
         window.handleAction = async function() {
-            if (!salonId || !auth.currentUser) return;
             const btn = document.getElementById("proceedBtn");
 
+            if (!salonId) {
+                window.showCustomPopup("Salon Missing", "Salon ID nahi mila. Kripya login karke dobara try karein.", "error");
+                return;
+            }
+
+            if (!auth.currentUser) {
+                window.showCustomPopup("Login Required", "Pehle admin account se login karein.", "error");
+                return;
+            }
+
             if (currentAmount === 0) {
+                const origHtml = btn.innerHTML;
                 btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Activating Trial...`;
                 btn.disabled = true;
 
@@ -136,8 +148,9 @@
                     const docRef = getSubscriptionDocRef(salonId);
                     const docSnap = await getDoc(docRef);
 
-                    if (docSnap.exists() && docSnap.data().trialClaimed === true) {
+                    if (docSnap.exists() && docSnap.data()?.trialClaimed === true) {
                         window.showCustomPopup("Error", "Aap pehle hi Free Trial use kar chuke hain!", "error");
+                        btn.innerHTML = origHtml;
                         btn.disabled = false;
                         return;
                     }
@@ -148,7 +161,7 @@
                     await setDoc(docRef, {
                         salonId,
                         ownerUid: auth.currentUser.uid,
-                        ownerEmail: (auth.currentUser.email || "").toLowerCase(),
+                        ownerEmail: (auth.currentUser.email || "").trim().toLowerCase(),
                         plan: "7 Days Free Trial",
                         status: "Active",
                         validity: expiryDate.toISOString(),
@@ -159,8 +172,8 @@
                     window.showCustomPopup("Trial Activated!", "7 Days Free Trial has been activated successfully.", "success");
                 } catch (error) {
                     console.error("Error:", error);
-                    window.showCustomPopup("Error", "Kuch error aayi, dobara try karein.", "error");
-                    btn.innerHTML = `<i class="fa-solid fa-check"></i> Activate 7 Days Free Trial`;
+                    window.showCustomPopup("Error", error?.message || "Kuch error aayi, dobara try karein.", "error");
+                    btn.innerHTML = origHtml;
                     btn.disabled = false;
                 }
             } else {
@@ -272,7 +285,7 @@
                     <label id="freeTrialCard" class="border-2 border-green-500 bg-green-50/50 p-3 rounded-2xl cursor-pointer flex flex-col justify-between transition plan-card" onclick="selectPlan(0, '7 Days Free Trial', 7, this)">
                         <div class="flex justify-between items-center">
                             <span class="text-xs font-bold text-green-700"><i class="fa-solid fa-star"></i> Free Trial</span>
-                            <input type="radio" id="trialRadio" name="plan" class="text-green-600">
+                            <input type="radio" id="trialRadio" name="plan" class="text-green-600" checked>
                         </div>
                         <p id="trialSubText" class="text-sm font-black text-green-600 mt-2">7 Days <span class="text-[10px] text-gray-500 font-normal">Free</span></p>
                     </label>
