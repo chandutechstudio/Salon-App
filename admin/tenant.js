@@ -1,6 +1,6 @@
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getFirestore, doc, collection, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-import { getAuth } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBR7QQNVmKmlAem6FRfqbMYVuK0tdwhb6I",
@@ -82,9 +82,9 @@ export function getSubscriptionDocRef(salonId) {
     return doc(db, "subscriptions", id);
 }
 
-// Verify karta hai ki logged-in admin hi is salon ka owner hai
+// Strict ownership verification: logged-in admin ka uid salon ownerUid se match hona chahiye
 export async function verifyAdminSalonAccess(user, candidateSlug) {
-    if (!user) return { ok: false, salonId: "" };
+    if (!user || !user.uid) return { ok: false, salonId: "" };
 
     const cleanCandidate = normalizeSalonId(candidateSlug);
     const emailKey = String(user.email || "").trim().toLowerCase();
@@ -93,30 +93,61 @@ export async function verifyAdminSalonAccess(user, candidateSlug) {
     if (emailKey) {
         try {
             const emailSnap = await getDoc(getSalonDocRef(emailKey));
-            if (emailSnap.exists() && emailSnap.data()?.linkedSalonSlug) {
-                ownedSlug = normalizeSalonId(emailSnap.data().linkedSalonSlug);
+            if (emailSnap.exists()) {
+                const eData = emailSnap.data() || {};
+                if (eData.ownerUid === user.uid && eData.linkedSalonSlug) {
+                    ownedSlug = normalizeSalonId(eData.linkedSalonSlug);
+                }
             }
         } catch (_) {}
     }
 
-    const targetSlug = cleanCandidate || ownedSlug || normalizeSalonId(emailKey);
+    const targetSlug = cleanCandidate || ownedSlug;
     if (!targetSlug) return { ok: false, salonId: "" };
 
     try {
         const salonSnap = await getDoc(getSalonDocRef(targetSlug));
-        if (salonSnap.exists()) {
-            const data = salonSnap.data() || {};
-            const ownerUidMatch = data.ownerUid && data.ownerUid === user.uid;
-            const ownerEmailMatch = data.ownerEmail && emailKey && String(data.ownerEmail).toLowerCase() === emailKey;
-
-            if (!ownerUidMatch && !ownerEmailMatch) {
-                if (ownedSlug && ownedSlug !== targetSlug) {
-                    return { ok: true, salonId: ownedSlug, redirectedFromUnauthorized: true };
-                }
-                return { ok: false, salonId: "" };
-            }
+        if (!salonSnap.exists()) {
+            return { ok: false, salonId: ownedSlug || "" };
         }
-    } catch (_) {}
 
-    return { ok: true, salonId: targetSlug, redirectedFromUnauthorized: false };
+        const data = salonSnap.data() || {};
+        if (!data.ownerUid || data.ownerUid !== user.uid) {
+            return { ok: false, salonId: ownedSlug || "" };
+        }
+
+        return { ok: true, salonId: targetSlug };
+    } catch (_) {
+        return { ok: false, salonId: "" };
+    }
+}
+
+// Har protected admin page ke liye mandatory auth + ownership guard
+export function requireAdminAuth(onAuthorized, { redirectTo = "index.html" } = {}) {
+    return onAuthStateChanged(auth, async (user) => {
+        if (!user || !user.uid) {
+            try { sessionStorage.clear(); } catch (_) {}
+            window.location.replace(redirectTo);
+            return;
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const candidate = params.get("salon") || sessionStorage.getItem("activeSalonId") || "";
+        const access = await verifyAdminSalonAccess(user, candidate);
+
+        if (!access.ok || !access.salonId) {
+            try { sessionStorage.clear(); } catch (_) {}
+            window.location.replace(redirectTo);
+            return;
+        }
+
+        sessionStorage.setItem("activeSalonId", access.salonId);
+        if (user.email) {
+            sessionStorage.setItem("adminEmail", user.email.trim().toLowerCase());
+        }
+
+        if (typeof onAuthorized === "function") {
+            await onAuthorized(user, access.salonId);
+        }
+    });
 }
