@@ -8,20 +8,13 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <script type="module">
-        import { getApps } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import {
-            salonNameToSlug,
-            normalizeSalonId,
-            getSalonDocRef
-        } from "./tenant.js";
-
-        const app = getApps()[0];
-        const auth = getAuth(app);
+        import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { auth, salonNameToSlug, normalizeSalonId, getSalonDocRef } from "./tenant.js";
 
         let currentAdminUser = null;
         let currentSalonSlug = "";
+        let unsubscribeSalon = null;
 
         function buildCustomerBookingLink(slug) {
             const cleanSlug = normalizeSalonId(slug);
@@ -94,36 +87,30 @@
             box.classList.remove("hidden");
         }
 
-        async function loadSalonSettings(slug) {
+        function listenSalonSettings(slug) {
             if (!slug) return;
             currentSalonSlug = slug;
             refreshSlugPreview();
 
-            try {
-                const snap = await getDoc(getSalonDocRef(slug));
+            if (unsubscribeSalon) {
+                unsubscribeSalon();
+                unsubscribeSalon = null;
+            }
+
+            unsubscribeSalon = onSnapshot(getSalonDocRef(slug), (snap) => {
                 if (snap.exists()) {
                     const data = snap.data() || {};
-                    if (data.salonName) {
-                        document.getElementById("salonNameInput").value = data.salonName;
-                    }
-                    if (data.phone) {
-                        document.getElementById("salonPhoneInput").value = data.phone;
-                    }
-                    if (data.city) {
-                        document.getElementById("salonCityInput").value = data.city;
-                    }
-                    if (data.address) {
-                        document.getElementById("salonAddressInput").value = data.address;
-                    }
-                    if (data.openingHours) {
-                        document.getElementById("salonHoursInput").value = data.openingHours;
-                    }
+                    if (data.salonName) document.getElementById("salonNameInput").value = data.salonName;
+                    if (data.phone) document.getElementById("salonPhoneInput").value = data.phone;
+                    if (data.city) document.getElementById("salonCityInput").value = data.city;
+                    if (data.address) document.getElementById("salonAddressInput").value = data.address;
+                    if (data.openingHours) document.getElementById("salonHoursInput").value = data.openingHours;
                 }
                 refreshSlugPreview();
-            } catch (err) {
+            }, (err) => {
                 console.error("Load salon settings error:", err);
                 showStatus("Could not load salon details: " + err.message, true);
-            }
+            });
         }
 
         window.saveSalonSettings = async function(event) {
@@ -152,9 +139,7 @@
             try {
                 currentSalonSlug = slug;
                 sessionStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("activeSalonId", slug);
-                localStorage.setItem("currentSalonSlug", slug);
-                localStorage.setItem("salonName", salonName);
+                sessionStorage.setItem("salonName", salonName);
 
                 await setDoc(
                     getSalonDocRef(slug),
@@ -207,9 +192,7 @@
             const params = new URLSearchParams(window.location.search);
             let resolvedSlug =
                 normalizeSalonId(params.get("salon")) ||
-                normalizeSalonId(sessionStorage.getItem("activeSalonId")) ||
-                normalizeSalonId(localStorage.getItem("currentSalonSlug")) ||
-                normalizeSalonId(localStorage.getItem("activeSalonId"));
+                normalizeSalonId(sessionStorage.getItem("activeSalonId"));
 
             if (user.email) {
                 try {
@@ -222,11 +205,9 @@
 
             if (resolvedSlug) {
                 sessionStorage.setItem("activeSalonId", resolvedSlug);
-                localStorage.setItem("activeSalonId", resolvedSlug);
-                localStorage.setItem("currentSalonSlug", resolvedSlug);
-                await loadSalonSettings(resolvedSlug);
+                listenSalonSettings(resolvedSlug);
             } else {
-                const fallbackName = localStorage.getItem("salonName") || user.email?.split("@")[0] || "My Salon";
+                const fallbackName = sessionStorage.getItem("salonName") || user.email?.split("@")[0] || "My Salon";
                 document.getElementById("salonNameInput").value = fallbackName;
                 refreshSlugPreview();
             }
