@@ -82,11 +82,36 @@ export function getSubscriptionDocRef(salonId) {
     return doc(db, "subscriptions", id);
 }
 
+// Agar purana slug change hua hai to latest active slug resolve karta hai
+export async function resolveCanonicalSalonId(rawSlug) {
+    let current = normalizeSalonId(rawSlug);
+    if (!current) return "";
+
+    const visited = new Set();
+    while (current && !visited.has(current)) {
+        visited.add(current);
+        try {
+            const snap = await getDoc(getSalonDocRef(current));
+            if (!snap.exists()) break;
+            const next = normalizeSalonId(snap.data()?.redirectToSlug || "");
+            if (next && next !== current) {
+                current = next;
+            } else {
+                break;
+            }
+        } catch (_) {
+            break;
+        }
+    }
+    return current;
+}
+
 // Strict ownership verification: logged-in admin ka uid salon ownerUid se match hona chahiye
 export async function verifyAdminSalonAccess(user, candidateSlug) {
     if (!user || !user.uid) return { ok: false, salonId: "" };
 
-    const cleanCandidate = normalizeSalonId(candidateSlug);
+    const rawCandidate = normalizeSalonId(candidateSlug);
+    const canonicalCandidate = rawCandidate ? await resolveCanonicalSalonId(rawCandidate) : "";
     const emailKey = String(user.email || "").trim().toLowerCase();
     let ownedSlug = "";
 
@@ -96,13 +121,13 @@ export async function verifyAdminSalonAccess(user, candidateSlug) {
             if (emailSnap.exists()) {
                 const eData = emailSnap.data() || {};
                 if (eData.ownerUid === user.uid && eData.linkedSalonSlug) {
-                    ownedSlug = normalizeSalonId(eData.linkedSalonSlug);
+                    ownedSlug = await resolveCanonicalSalonId(eData.linkedSalonSlug);
                 }
             }
         } catch (_) {}
     }
 
-    const targetSlug = cleanCandidate || ownedSlug;
+    const targetSlug = canonicalCandidate || ownedSlug;
     if (!targetSlug) return { ok: false, salonId: "" };
 
     try {
