@@ -1,0 +1,79 @@
+name: Build Custom Salon APK
+
+on:
+  repository_dispatch:
+    types: [build-salon-apk]
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Inject Salon App Name, URL & Icons
+        working-directory: android-builder
+        shell: python3
+        env:
+          APP_NAME: ${{ github.event.client_payload.appName }}
+          SALON_ID: ${{ github.event.client_payload.salonId }}
+          USER_APP_URL: ${{ github.event.client_payload.userAppUrl }}
+          LOGO_DATA_URL: ${{ github.event.client_payload.logoUrl }}
+          SPLASH_DATA_URL: ${{ github.event.client_payload.splashUrl }}
+        run: |
+          import os, base64, re
+
+          app_name = (os.environ.get("APP_NAME") or "Salon App").replace("&", "&amp;").replace("<", "&lt;")
+          user_url = (os.environ.get("USER_APP_URL") or "").replace("&", "&amp;")
+
+          strings_path = "app/src/main/res/values/strings.xml"
+          with open(strings_path, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          content = re.sub(r'<string name="app_name">.*?</string>', f'<string name="app_name">{app_name}</string>', content, flags=re.S)
+          if '<string name="target_url">' in content:
+              content = re.sub(r'<string name="target_url">.*?</string>', f'<string name="target_url">{user_url}</string>', content, flags=re.S)
+          else:
+              content = content.replace("</resources>", f'    <string name="target_url">{user_url}</string>\n</resources>')
+
+          with open(strings_path, "w", encoding="utf-8") as f:
+              f.write(content)
+
+          def save_data_url(data_url, out_path):
+              if not data_url or "," not in data_url:
+                  return False
+              b64 = data_url.split(",", 1)[1]
+              raw = base64.b64decode(b64)
+              os.makedirs(os.path.dirname(out_path), exist_ok=True)
+              with open(out_path, "wb") as img_f:
+                  img_f.write(raw)
+              return True
+
+          save_data_url(os.environ.get("LOGO_DATA_URL", ""), "app/src/main/res/drawable/salon_logo.jpg")
+          if not save_data_url(os.environ.get("SPLASH_DATA_URL", ""), "app/src/main/res/drawable/salon_splash.jpg"):
+              save_data_url(os.environ.get("LOGO_DATA_URL", ""), "app/src/main/res/drawable/salon_splash.jpg")
+
+      - name: Build APK with Gradle
+        working-directory: android-builder
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.event.client_payload.salonId }}-${{ github.event.client_payload.buildId }}
+          name: ${{ github.event.client_payload.appName }} (${{ github.event.client_payload.salonId }})
+          files: android-builder/app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
