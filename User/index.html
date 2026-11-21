@@ -25,23 +25,35 @@
             getCustomerDocRef
         } from "./tenant.js";
 
-        let activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG });
+        let activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
         let isRedirecting = false;
+
+        function showError(msg) {
+            const errorBox = document.getElementById("authError");
+            if (!errorBox) return;
+            errorBox.innerText = msg;
+            errorBox.classList.remove("hide");
+        }
+
+        window.addEventListener("error", (event) => {
+            showError("⚠️ Page Script Error: " + (event.message || "Unknown error"));
+        });
+
+        window.addEventListener("unhandledrejection", (event) => {
+            const reasonMsg = event.reason?.message || String(event.reason || "Network/Auth error");
+            showError("⚠️ Error: " + reasonMsg);
+        });
 
         async function getResolvedSalonSlug() {
             const immediateSlug = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
             activeSalonId = immediateSlug;
-
             try {
                 const canonical = await Promise.race([
                     resolveCanonicalSalonId(immediateSlug, { persist: true }),
-                    new Promise((resolve) => setTimeout(() => resolve(immediateSlug), 2000))
+                    new Promise((resolve) => setTimeout(() => resolve(immediateSlug), 1500))
                 ]);
-                if (canonical) {
-                    activeSalonId = canonical;
-                }
+                if (canonical) activeSalonId = canonical;
             } catch (_) {}
-
             return activeSalonId || DEFAULT_SALON_SLUG;
         }
 
@@ -60,11 +72,11 @@
 
             const slug = await getResolvedSalonSlug();
             const displayName = user.displayName || (user.email ? user.email.split("@")[0] : "Customer");
-            sessionStorage.setItem("salonCustomerName", displayName);
-            if (user.email) {
-                sessionStorage.setItem("salonCustomerEmail", user.email.trim().toLowerCase());
-            }
-            sessionStorage.setItem("activeSalonId", slug);
+            try {
+                sessionStorage.setItem("salonCustomerName", displayName);
+                if (user.email) sessionStorage.setItem("salonCustomerEmail", user.email.trim().toLowerCase());
+                sessionStorage.setItem("activeSalonId", slug);
+            } catch (_) {}
 
             window.location.replace(getPostAuthRedirectUrl(slug));
         }
@@ -72,8 +84,6 @@
         onAuthStateChanged(auth, async (user) => {
             if (user) {
                 await redirectToHomeIfAuthenticated(user);
-            } else {
-                await getResolvedSalonSlug();
             }
         });
 
@@ -92,41 +102,39 @@
                 loginF.classList.remove("hide");
                 title.innerText = "Welcome Back";
                 subtitle.innerText = "Login to your user account";
-            } else if (view === "register") {
+            } else {
                 regF.classList.remove("hide");
                 title.innerText = "Create Account";
                 subtitle.innerText = "Sign up for new booking experience";
             }
         };
 
-        function showError(msg) {
-            const errorBox = document.getElementById("authError");
-            errorBox.innerText = msg;
-            errorBox.classList.remove("hide");
-        }
-
         async function syncCustomerToSalon(user, name, email, salonSlug) {
-            const salonId = salonSlug || resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
-            if (!salonId || !user) return;
-            await setDoc(
-                getCustomerDocRef(salonId, user.uid),
-                {
-                    uid: user.uid,
-                    name: name || user.displayName || email.split("@")[0],
-                    email: email.toLowerCase(),
-                    salonId,
-                    updatedAt: serverTimestamp()
-                },
-                { merge: true }
-            ).catch((err) => console.warn("Customer sync warning:", err));
+            if (!salonSlug || !user) return;
+            try {
+                await Promise.race([
+                    setDoc(
+                        getCustomerDocRef(salonSlug, user.uid),
+                        {
+                            uid: user.uid,
+                            name: name || user.displayName || email.split("@")[0],
+                            email: email.toLowerCase(),
+                            salonId: salonSlug,
+                            updatedAt: serverTimestamp()
+                        },
+                        { merge: true }
+                    ),
+                    new Promise((resolve) => setTimeout(resolve, 1500))
+                ]);
+            } catch (_) {}
         }
 
         document.getElementById("loginForm").addEventListener("submit", async (e) => {
             e.preventDefault();
             const submitBtn = e.target.querySelector('button[type="submit"]');
             const origHtml = submitBtn.innerHTML;
+            document.getElementById("authError").classList.add("hide");
 
-            const salonSlug = await getResolvedSalonSlug();
             const email = document.getElementById("loginEmail").value.trim().toLowerCase();
             const pass = document.getElementById("loginPass").value;
 
@@ -134,30 +142,30 @@
             submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Logging in...`;
 
             try {
+                const salonSlug = await getResolvedSalonSlug();
                 isRedirecting = true;
                 const userCredential = await signInWithEmailAndPassword(auth, email, pass);
                 const resolvedName = userCredential.user.displayName || email.split("@")[0];
-                sessionStorage.setItem("salonCustomerName", resolvedName);
-                sessionStorage.setItem("salonCustomerEmail", email);
-                sessionStorage.setItem("activeSalonId", salonSlug);
 
-                await Promise.race([
-                    syncCustomerToSalon(userCredential.user, resolvedName, email, salonSlug),
-                    new Promise((resolve) => setTimeout(resolve, 2000))
-                ]);
+                try {
+                    sessionStorage.setItem("salonCustomerName", resolvedName);
+                    sessionStorage.setItem("salonCustomerEmail", email);
+                    sessionStorage.setItem("activeSalonId", salonSlug);
+                } catch (_) {}
 
+                await syncCustomerToSalon(userCredential.user, resolvedName, email, salonSlug);
                 window.location.replace(getPostAuthRedirectUrl(salonSlug));
             } catch (error) {
                 isRedirecting = false;
                 submitBtn.disabled = false;
                 submitBtn.innerHTML = origHtml;
-                console.error(error.code);
-                if (error.code === "auth/user-not-found" || error.code === "auth/invalid-credential" || error.code === "auth/invalid-email") {
-                    showError("⚠️ Is email se account nahi bana hai! Kripya pehle Register karein.");
-                } else if (error.code === "auth/wrong-password") {
+                const code = error?.code || "";
+                if (code === "auth/user-not-found" || code === "auth/invalid-credential" || code === "auth/invalid-email") {
+                    showError("⚠️ Is email se account nahi bana hai ya email galat hai! Kripya Register karein.");
+                } else if (code === "auth/wrong-password") {
                     showError("⚠️ Wrong Password! Password galat hai.");
                 } else {
-                    showError("⚠️ Login Failed: " + (error?.message || "Please try again."));
+                    showError("⚠️ Login Failed (" + (code || "error") + "): " + (error?.message || "Please try again."));
                 }
             }
         });
@@ -166,8 +174,8 @@
             e.preventDefault();
             const submitBtn = e.target.querySelector('button[type="submit"]');
             const origHtml = submitBtn.innerHTML;
+            document.getElementById("authError").classList.add("hide");
 
-            const salonSlug = await getResolvedSalonSlug();
             const name = document.getElementById("regName").value.trim();
             const email = document.getElementById("regEmail").value.trim().toLowerCase();
             const pass = document.getElementById("regPass").value;
@@ -181,6 +189,7 @@
             submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Registering...`;
 
             try {
+                const salonSlug = await getResolvedSalonSlug();
                 isRedirecting = true;
                 const cred = await createUserWithEmailAndPassword(auth, email, pass);
                 if (name) {
@@ -188,27 +197,25 @@
                 }
 
                 const resolvedName = name || email.split("@")[0];
-                sessionStorage.setItem("salonCustomerName", resolvedName);
-                sessionStorage.setItem("salonCustomerEmail", email);
-                sessionStorage.setItem("activeSalonId", salonSlug);
+                try {
+                    sessionStorage.setItem("salonCustomerName", resolvedName);
+                    sessionStorage.setItem("salonCustomerEmail", email);
+                    sessionStorage.setItem("activeSalonId", salonSlug);
+                } catch (_) {}
 
-                await Promise.race([
-                    syncCustomerToSalon(cred.user, resolvedName, email, salonSlug),
-                    new Promise((resolve) => setTimeout(resolve, 2000))
-                ]);
-
+                await syncCustomerToSalon(cred.user, resolvedName, email, salonSlug);
                 window.location.replace(getPostAuthRedirectUrl(salonSlug));
             } catch (error) {
                 isRedirecting = false;
                 submitBtn.disabled = false;
                 submitBtn.innerHTML = origHtml;
-                console.error(error.code);
-                if (error.code === "auth/email-already-in-use") {
+                const code = error?.code || "";
+                if (code === "auth/email-already-in-use") {
                     showError("⚠️ Already Account exists with this email! Kripya Login karein.");
-                } else if (error.code === "auth/invalid-email") {
+                } else if (code === "auth/invalid-email") {
                     showError("⚠️ Wrong Email ID format!");
                 } else {
-                    showError("⚠️ Registration Failed: " + (error?.message || "Please try again."));
+                    showError("⚠️ Registration Failed (" + (code || "error") + "): " + (error?.message || "Please try again."));
                 }
             }
         });
