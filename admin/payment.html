@@ -66,6 +66,16 @@
             return slug;
         }
 
+        function syncPageLinks(slug) {
+            const cleanSlug = normalizeSalonId(slug);
+            document.querySelectorAll("a[data-nav-page]").forEach((a) => {
+                const target = a.getAttribute("data-nav-page");
+                if (target && cleanSlug) {
+                    a.href = `${target}?salon=${encodeURIComponent(cleanSlug)}`;
+                }
+            });
+        }
+
         function renderZapLockState(unlocked) {
             isZapUnlocked = Boolean(unlocked);
 
@@ -345,7 +355,8 @@
                 window.location.href = "index.html";
                 return;
             }
-            document.getElementById("activeTenantEmail").innerText = salonId;
+            syncPageLinks(salonId);
+            document.getElementById("activeTenantEmail").innerText = "Connected";
             await listenPaymentConfig();
         });
     </script>
@@ -358,17 +369,17 @@
 
         <header class="bg-gradient-to-r from-indigo-600 to-violet-600 text-white p-6 rounded-3xl shadow-md flex flex-wrap justify-between items-center gap-4">
             <div class="flex items-center gap-3">
-                <a href="settings.html" class="bg-white/20 hover:bg-white/30 text-white p-2.5 rounded-xl transition">
+                <a data-nav-page="settings.html" href="settings.html" class="bg-white/20 hover:bg-white/30 text-white p-2.5 rounded-xl transition">
                     <i class="fa-solid fa-arrow-left text-sm"></i>
                 </a>
                 <div>
                     <h1 class="text-xl font-bold">Manage Payment Methods</h1>
                     <p class="text-xs text-indigo-100 mt-0.5">
-                        Salon: <span id="activeTenantEmail" class="font-semibold underline">Loading...</span>
+                        Status: <span id="activeTenantEmail" class="font-semibold">Loading...</span>
                     </p>
                 </div>
             </div>
-            <a href="dashboard.html" class="bg-white text-indigo-700 px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-indigo-50 transition">
+            <a data-nav-page="dashboard.html" href="dashboard.html" class="bg-white text-indigo-700 px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-indigo-50 transition">
                 <i class="fa-solid fa-chart-line mr-1"></i> Dashboard
             </a>
         </header>
@@ -380,7 +391,7 @@
                     <h3 class="font-bold text-base text-slate-900">
                         <i class="fa-solid fa-qrcode text-indigo-600 mr-1.5"></i> Manual UPI & QR Settings
                     </h3>
-                    <span class="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">Firestore Sync</span>
+                    <span class="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full">Cloud Sync</span>
                 </div>
 
                 <form id="manualUpiForm" class="space-y-3.5">
@@ -478,4 +489,4 @@
         </div>
     </div>
 </body>
-</html> 
+</html>
