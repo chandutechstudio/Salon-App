@@ -19,6 +19,7 @@ export const auth = getAuth(app);
 
 export const DEVELOPER_ZAP_KEY = "zap9616e75062c85cc199581822ae0d1d5";
 export const ZAP_UNLOCK_AMOUNT = "100";
+export const DEFAULT_SALON_SLUG = "style-hub";
 
 try {
     localStorage.removeItem("userBookings");
@@ -40,25 +41,35 @@ export function normalizeSalonId(rawValue) {
     return rawValue.trim().toLowerCase();
 }
 
-export function resolveActiveSalonId({ persist = true } = {}) {
+export function resolveActiveSalonId({ persist = true, fallback = "" } = {}) {
     const params = new URLSearchParams(window.location.search);
     const fromUrl = normalizeSalonId(params.get("salon"));
 
     if (fromUrl) {
         if (persist) {
-            sessionStorage.setItem("activeSalonId", fromUrl);
+            try { sessionStorage.setItem("activeSalonId", fromUrl); } catch (_) {}
         }
         return fromUrl;
     }
 
-    const fromSession = normalizeSalonId(sessionStorage.getItem("activeSalonId"));
-    if (fromSession) return fromSession;
+    try {
+        const fromSession = normalizeSalonId(sessionStorage.getItem("activeSalonId"));
+        if (fromSession) return fromSession;
+    } catch (_) {}
+
+    const cleanFallback = normalizeSalonId(fallback);
+    if (cleanFallback) {
+        if (persist) {
+            try { sessionStorage.setItem("activeSalonId", cleanFallback); } catch (_) {}
+        }
+        return cleanFallback;
+    }
 
     return "";
 }
 
 export function buildSalonUrl(pageName, salonId, extraParams = {}) {
-    const cleanId = normalizeSalonId(salonId);
+    const cleanId = normalizeSalonId(salonId) || DEFAULT_SALON_SLUG;
     const url = new URL(pageName, window.location.href);
     if (cleanId) url.searchParams.set("salon", cleanId);
     Object.entries(extraParams).forEach(([key, value]) => {
@@ -87,7 +98,6 @@ export function getCustomerDocRef(salonId, uid) {
     return doc(db, "salons", id, "customers", uid);
 }
 
-// Agar salon owner ne slug change kiya hai to purane slug ko latest active slug par resolve karta hai
 export async function resolveCanonicalSalonId(rawSlug, { persist = true } = {}) {
     let current = normalizeSalonId(rawSlug);
     if (!current) return "";
@@ -118,8 +128,8 @@ export async function resolveCanonicalSalonId(rawSlug, { persist = true } = {}) 
     return current;
 }
 
-export async function resolveCanonicalActiveSalonId({ persist = true } = {}) {
-    const initialId = resolveActiveSalonId({ persist });
+export async function resolveCanonicalActiveSalonId({ persist = true, fallback = "" } = {}) {
+    const initialId = resolveActiveSalonId({ persist, fallback });
     if (!initialId) return "";
     return await resolveCanonicalSalonId(initialId, { persist });
 }
