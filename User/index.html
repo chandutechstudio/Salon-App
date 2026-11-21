@@ -4,251 +4,342 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Salon App - Login / Register</title>
+    <link id="dynamicManifestLink" rel="manifest">
+    <link id="dynamicIconLink" rel="icon" href="">
+    <link id="dynamicAppleIconLink" rel="apple-touch-icon" href="">
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>.hide { display: none !important; }</style>
 
-    <script>
-        function switchAuthView(view) {
+    <script type="module">
+        import {
+            onAuthStateChanged,
+            signInWithEmailAndPassword,
+            createUserWithEmailAndPassword,
+            updateProfile
+        } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import {
+            auth,
+            DEFAULT_SALON_SLUG,
+            resolveActiveSalonId,
+            resolveCanonicalSalonId,
+            buildSalonUrl,
+            getSalonDocRef,
+            getCustomerDocRef
+        } from "./tenant.js";
+
+        let activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG });
+        let isRedirecting = false;
+        let deferredInstallPrompt = null;
+        let pwaAppliedForSlug = "";
+
+        window.addEventListener("beforeinstallprompt", (e) => {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+            const banner = document.getElementById("installAppBanner");
+            if (banner) banner.classList.remove("hide");
+        });
+
+        function hideSplashScreen() {
+            const splash = document.getElementById("salonSplashScreen");
+            if (!splash) return;
+            setTimeout(() => {
+                splash.style.opacity = "0";
+                setTimeout(() => splash.classList.add("hide"), 450);
+            }, 650);
+        }
+
+        async function applyDynamicSalonPwa(salonSlug) {
+            const targetSlug = normalizeSlugSafe(salonSlug);
+            if (!targetSlug || pwaAppliedForSlug === targetSlug) {
+                hideSplashScreen();
+                return;
+            }
+            pwaAppliedForSlug = targetSlug;
+
+            if ("serviceWorker" in navigator) {
+                navigator.serviceWorker.register("./sw.js").catch(() => {});
+            }
+
+            let appName = "Salon App";
+            let logoUrl = "";
+            let splashUrl = "";
+
+            try {
+                const snap = await getDoc(getSalonDocRef(targetSlug));
+                if (snap.exists()) {
+                    const data = snap.data() || {};
+                    const pwa = data.pwaConfig || {};
+                    appName = pwa.appName || data.salonName || appName;
+                    logoUrl = pwa.logoUrl || "";
+                    splashUrl = pwa.splashUrl || logoUrl || "";
+                }
+            } catch (_) {}
+
+            document.title = `${appName} - Login / Register`;
+
+            const cardTitleEl = document.getElementById("brandAppTitle");
+            if (cardTitleEl) cardTitleEl.innerText = appName;
+
+            const splashTitle = document.getElementById("splashAppTitle");
+            const splashImg = document.getElementById("splashImageEl");
+            if (splashTitle) splashTitle.textContent = appName;
+            if (splashUrl && splashImg) {
+                splashImg.src = splashUrl;
+                splashImg.classList.remove("hide");
+            }
+
+            const bannerName = document.getElementById("bannerAppName");
+            const bannerIcon = document.getElementById("bannerAppIcon");
+            if (bannerName) bannerName.textContent = `Install ${appName}`;
+            if (logoUrl && bannerIcon) {
+                bannerIcon.src = logoUrl;
+                bannerIcon.classList.remove("hide");
+            }
+
+            if (logoUrl) {
+                const iconLink = document.getElementById("dynamicIconLink");
+                const appleIconLink = document.getElementById("dynamicAppleIconLink");
+                if (iconLink) iconLink.href = logoUrl;
+                if (appleIconLink) appleIconLink.href = logoUrl;
+            }
+
+            const startUrl = new URL(window.location.href);
+            startUrl.searchParams.set("salon", targetSlug);
+
+            const manifestObj = {
+                name: appName,
+                short_name: appName.slice(0, 12),
+                start_url: startUrl.pathname + startUrl.search,
+                scope: "./",
+                display: "standalone",
+                background_color: "#020617",
+                icons: logoUrl
+                    ? [
+                        { src: logoUrl, sizes: "192x192", type: "image/jpeg" },
+                        { src: logoUrl, sizes: "512x512", type: "image/jpeg" }
+                    ]
+                    : []
+            };
+
+            const manifestBlob = new Blob([JSON.stringify(manifestObj)], { type: "application/manifest+json" });
+            const manifestLink = document.getElementById("dynamicManifestLink");
+            if (manifestLink) manifestLink.href = URL.createObjectURL(manifestBlob);
+
+            const installBtn = document.getElementById("installAppBtn");
+            const banner = document.getElementById("installAppBanner");
+            const hintEl = document.getElementById("bannerAppHint");
+            const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+            const isStandalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+
+            if (!isStandalone && isIos && banner) {
+                if (hintEl) hintEl.textContent = "Safari mein Share → Add to Home Screen dabayein";
+                if (installBtn) installBtn.classList.add("hide");
+                banner.classList.remove("hide");
+            }
+
+            if (installBtn && !installBtn.dataset.bound) {
+                installBtn.dataset.bound = "1";
+                installBtn.addEventListener("click", async () => {
+                    if (!deferredInstallPrompt) return;
+                    deferredInstallPrompt.prompt();
+                    await deferredInstallPrompt.userChoice.catch(() => {});
+                    deferredInstallPrompt = null;
+                    if (banner) banner.classList.add("hide");
+                });
+            }
+
+            hideSplashScreen();
+        }
+
+        function normalizeSlugSafe(slug) {
+            return String(slug || "").trim().toLowerCase();
+        }
+
+        async function getResolvedSalonSlug() {
+            const immediateSlug = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
+            activeSalonId = immediateSlug;
+            await applyDynamicSalonPwa(immediateSlug);
+
+            try {
+                const canonical = await Promise.race([
+                    resolveCanonicalSalonId(immediateSlug, { persist: true }),
+                    new Promise((resolve) => setTimeout(() => resolve(immediateSlug), 2000))
+                ]);
+                if (canonical) {
+                    activeSalonId = canonical;
+                    await applyDynamicSalonPwa(canonical);
+                }
+            } catch (_) {}
+
+            return activeSalonId || DEFAULT_SALON_SLUG;
+        }
+
+        function getPostAuthRedirectUrl(salonSlug) {
+            const targetSlug = salonSlug || activeSalonId || DEFAULT_SALON_SLUG;
+            const params = new URLSearchParams(window.location.search);
+            const rawNext = (params.get("next") || "").trim();
+            const safePages = ["home.html", "booking.html", "payment.html", "category.html", "status.html", "history.html", "profile.html", "success.html"];
+            const targetPage = safePages.includes(rawNext) ? rawNext : "home.html";
+            return buildSalonUrl(targetPage, targetSlug);
+        }
+
+        async function redirectToHomeIfAuthenticated(user) {
+            if (!user || isRedirecting) return;
+            isRedirecting = true;
+
+            const slug = await getResolvedSalonSlug();
+            const displayName = user.displayName || (user.email ? user.email.split("@")[0] : "Customer");
+            sessionStorage.setItem("salonCustomerName", displayName);
+            if (user.email) {
+                sessionStorage.setItem("salonCustomerEmail", user.email.trim().toLowerCase());
+            }
+            sessionStorage.setItem("activeSalonId", slug);
+
+            window.location.replace(getPostAuthRedirectUrl(slug));
+        }
+
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                await redirectToHomeIfAuthenticated(user);
+            } else {
+                await getResolvedSalonSlug();
+            }
+        });
+
+        window.switchAuthView = function(view) {
             const loginF = document.getElementById("loginForm");
             const regF = document.getElementById("registerForm");
             const title = document.getElementById("screenTitle");
             const subtitle = document.getElementById("screenSubtitle");
             const errorBox = document.getElementById("authError");
 
-            if (loginF) loginF.classList.add("hide");
-            if (regF) regF.classList.add("hide");
-            if (errorBox) errorBox.classList.add("hide");
+            loginF.classList.add("hide");
+            regF.classList.add("hide");
+            errorBox.classList.add("hide");
 
-            if (view === "register") {
-                if (regF) regF.classList.remove("hide");
-                if (title) title.innerText = "Create Account";
-                if (subtitle) subtitle.innerText = "Sign up for new booking experience";
-            } else {
-                if (loginF) loginF.classList.remove("hide");
-                if (title) title.innerText = "Welcome Back";
-                if (subtitle) subtitle.innerText = "Login to your user account";
+            if (view === "login") {
+                loginF.classList.remove("hide");
+                title.innerText = "Welcome Back";
+                subtitle.innerText = "Login to your user account";
+            } else if (view === "register") {
+                regF.classList.remove("hide");
+                title.innerText = "Create Account";
+                subtitle.innerText = "Sign up for new booking experience";
             }
-        }
+        };
 
-        function showAuthError(msg) {
+        function showError(msg) {
             const errorBox = document.getElementById("authError");
-            if (!errorBox) return;
             errorBox.innerText = msg;
             errorBox.classList.remove("hide");
         }
-    </script>
 
-    <script type="module">
-        import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import {
-            getAuth,
-            onAuthStateChanged,
-            signInWithEmailAndPassword,
-            createUserWithEmailAndPassword,
-            updateProfile
-        } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import {
-            getFirestore,
-            doc,
-            getDoc,
-            setDoc,
-            serverTimestamp
-        } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-
-        const firebaseConfig = {
-            apiKey: "AIzaSyBR7QQNVmKmlAem6FRfqbMYVuK0tdwhb6I",
-            authDomain: "creator-chandu.firebaseapp.com",
-            projectId: "creator-chandu",
-            storageBucket: "creator-chandu.firebasestorage.app",
-            messagingSenderId: "536504537561",
-            appId: "1:536504537561:web:3c7d0362376f63462649c8",
-            measurementId: "G-7RLH5MVLV3"
-        };
-
-        const DEFAULT_SALON_SLUG = "style-hub";
-        const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-
-        let isRedirecting = false;
-
-        function normalizeSlug(val) {
-            return String(val || "").trim().toLowerCase();
+        async function syncCustomerToSalon(user, name, email, salonSlug) {
+            const salonId = salonSlug || resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
+            if (!salonId || !user) return;
+            await setDoc(
+                getCustomerDocRef(salonId, user.uid),
+                {
+                    uid: user.uid,
+                    name: name || user.displayName || email.split("@")[0],
+                    email: email.toLowerCase(),
+                    salonId,
+                    updatedAt: serverTimestamp()
+                },
+                { merge: true }
+            ).catch((err) => console.warn("Customer sync warning:", err));
         }
-
-        function getInitialSlug() {
-            const params = new URLSearchParams(window.location.search);
-            const fromUrl = normalizeSlug(params.get("salon"));
-            if (fromUrl) {
-                try { sessionStorage.setItem("activeSalonId", fromUrl); } catch (_) {}
-                return fromUrl;
-            }
-            try {
-                const fromSession = normalizeSlug(sessionStorage.getItem("activeSalonId"));
-                if (fromSession) return fromSession;
-            } catch (_) {}
-            return DEFAULT_SALON_SLUG;
-        }
-
-        async function resolveSlug(baseSlug) {
-            let current = normalizeSlug(baseSlug) || DEFAULT_SALON_SLUG;
-            const visited = new Set();
-            while (current && !visited.has(current)) {
-                visited.add(current);
-                try {
-                    const snap = await Promise.race([
-                        getDoc(doc(db, "salons", current)),
-                        new Promise((resolve) => setTimeout(() => resolve(null), 1500))
-                    ]);
-                    if (!snap || !snap.exists()) break;
-                    const next = normalizeSlug(snap.data()?.redirectToSlug || "");
-                    if (next && next !== current) {
-                        current = next;
-                    } else {
-                        break;
-                    }
-                } catch (_) {
-                    break;
-                }
-            }
-            try { sessionStorage.setItem("activeSalonId", current); } catch (_) {}
-            return current;
-        }
-
-        function buildHomeUrl(salonSlug) {
-            const cleanSlug = normalizeSlug(salonSlug) || DEFAULT_SALON_SLUG;
-            const params = new URLSearchParams(window.location.search);
-            const rawNext = (params.get("next") || "").trim();
-            const safePages = ["home.html", "booking.html", "payment.html", "category.html", "status.html", "history.html", "profile.html", "success.html"];
-            const targetPage = safePages.includes(rawNext) ? rawNext : "home.html";
-            const url = new URL(targetPage, window.location.href);
-            url.searchParams.set("salon", cleanSlug);
-            return url.toString();
-        }
-
-        async function syncCustomer(user, name, email, salonSlug) {
-            if (!user || !salonSlug) return;
-            try {
-                await Promise.race([
-                    setDoc(
-                        doc(db, "salons", salonSlug, "customers", user.uid),
-                        {
-                            uid: user.uid,
-                            name: name || user.displayName || email.split("@")[0],
-                            email: email.toLowerCase(),
-                            salonId: salonSlug,
-                            updatedAt: serverTimestamp()
-                        },
-                        { merge: true }
-                    ),
-                    new Promise((resolve) => setTimeout(resolve, 1500))
-                ]);
-            } catch (_) {}
-        }
-
-        async function goToHome(user, slug) {
-            if (isRedirecting) return;
-            isRedirecting = true;
-            const finalSlug = await resolveSlug(slug || getInitialSlug());
-            const displayName = user.displayName || (user.email ? user.email.split("@")[0] : "Customer");
-            try {
-                sessionStorage.setItem("salonCustomerName", displayName);
-                if (user.email) sessionStorage.setItem("salonCustomerEmail", user.email.trim().toLowerCase());
-                sessionStorage.setItem("activeSalonId", finalSlug);
-            } catch (_) {}
-            window.location.replace(buildHomeUrl(finalSlug));
-        }
-
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                await goToHome(user, getInitialSlug());
-            }
-        });
 
         document.getElementById("loginForm").addEventListener("submit", async (e) => {
             e.preventDefault();
-            const btn = e.target.querySelector('button[type="submit"]');
-            const origText = btn.innerHTML;
-            document.getElementById("authError").classList.add("hide");
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            const origHtml = submitBtn.innerHTML;
 
+            const salonSlug = await getResolvedSalonSlug();
             const email = document.getElementById("loginEmail").value.trim().toLowerCase();
             const pass = document.getElementById("loginPass").value;
 
-            btn.disabled = true;
-            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Logging in...`;
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Logging in...`;
 
             try {
-                const slug = await resolveSlug(getInitialSlug());
                 isRedirecting = true;
-                const cred = await signInWithEmailAndPassword(auth, email, pass);
-                const resolvedName = cred.user.displayName || email.split("@")[0];
-                await syncCustomer(cred.user, resolvedName, email, slug);
-                try {
-                    sessionStorage.setItem("salonCustomerName", resolvedName);
-                    sessionStorage.setItem("salonCustomerEmail", email);
-                    sessionStorage.setItem("activeSalonId", slug);
-                } catch (_) {}
-                window.location.replace(buildHomeUrl(slug));
-            } catch (err) {
+                const userCredential = await signInWithEmailAndPassword(auth, email, pass);
+                const resolvedName = userCredential.user.displayName || email.split("@")[0];
+                sessionStorage.setItem("salonCustomerName", resolvedName);
+                sessionStorage.setItem("salonCustomerEmail", email);
+                sessionStorage.setItem("activeSalonId", salonSlug);
+
+                await Promise.race([
+                    syncCustomerToSalon(userCredential.user, resolvedName, email, salonSlug),
+                    new Promise((resolve) => setTimeout(resolve, 2000))
+                ]);
+
+                window.location.replace(getPostAuthRedirectUrl(salonSlug));
+            } catch (error) {
                 isRedirecting = false;
-                btn.disabled = false;
-                btn.innerHTML = origText;
-                const code = err?.code || "";
-                if (code === "auth/user-not-found" || code === "auth/invalid-credential" || code === "auth/invalid-email") {
-                    showAuthError("⚠️ Is email se account nahi bana hai! Kripya pehle Register karein.");
-                } else if (code === "auth/wrong-password") {
-                    showAuthError("⚠️ Wrong Password! Password galat hai.");
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = origHtml;
+                console.error(error.code);
+                if (error.code === "auth/user-not-found" || error.code === "auth/invalid-credential" || error.code === "auth/invalid-email") {
+                    showError("⚠️ Is email se account nahi bana hai! Kripya pehle Register karein.");
+                } else if (error.code === "auth/wrong-password") {
+                    showError("⚠️ Wrong Password! Password galat hai.");
                 } else {
-                    showAuthError("⚠️ Login Failed: " + (err?.message || "Please try again."));
+                    showError("⚠️ Login Failed: " + (error?.message || "Please try again."));
                 }
             }
         });
 
         document.getElementById("registerForm").addEventListener("submit", async (e) => {
             e.preventDefault();
-            const btn = e.target.querySelector('button[type="submit"]');
-            const origText = btn.innerHTML;
-            document.getElementById("authError").classList.add("hide");
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            const origHtml = submitBtn.innerHTML;
 
+            const salonSlug = await getResolvedSalonSlug();
             const name = document.getElementById("regName").value.trim();
             const email = document.getElementById("regEmail").value.trim().toLowerCase();
             const pass = document.getElementById("regPass").value;
 
             if (pass.length < 6) {
-                showAuthError("⚠️ Password kam se kam 6 characters ka hona chahiye!");
+                showError("⚠️ Password kam se kam 6 characters ka hona chahiye!");
                 return;
             }
 
-            btn.disabled = true;
-            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Registering...`;
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Registering...`;
 
             try {
-                const slug = await resolveSlug(getInitialSlug());
                 isRedirecting = true;
                 const cred = await createUserWithEmailAndPassword(auth, email, pass);
                 if (name) {
                     await updateProfile(cred.user, { displayName: name }).catch(() => {});
                 }
+
                 const resolvedName = name || email.split("@")[0];
-                await syncCustomer(cred.user, resolvedName, email, slug);
-                try {
-                    sessionStorage.setItem("salonCustomerName", resolvedName);
-                    sessionStorage.setItem("salonCustomerEmail", email);
-                    sessionStorage.setItem("activeSalonId", slug);
-                } catch (_) {}
-                window.location.replace(buildHomeUrl(slug));
-            } catch (err) {
+                sessionStorage.setItem("salonCustomerName", resolvedName);
+                sessionStorage.setItem("salonCustomerEmail", email);
+                sessionStorage.setItem("activeSalonId", salonSlug);
+
+                await Promise.race([
+                    syncCustomerToSalon(cred.user, resolvedName, email, salonSlug),
+                    new Promise((resolve) => setTimeout(resolve, 2000))
+                ]);
+
+                window.location.replace(getPostAuthRedirectUrl(salonSlug));
+            } catch (error) {
                 isRedirecting = false;
-                btn.disabled = false;
-                btn.innerHTML = origText;
-                const code = err?.code || "";
-                if (code === "auth/email-already-in-use") {
-                    showAuthError("⚠️ Already Account exists with this email! Kripya Login karein.");
-                } else if (code === "auth/invalid-email") {
-                    showAuthError("⚠️ Wrong Email ID format!");
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = origHtml;
+                console.error(error.code);
+                if (error.code === "auth/email-already-in-use") {
+                    showError("⚠️ Already Account exists with this email! Kripya Login karein.");
+                } else if (error.code === "auth/invalid-email") {
+                    showError("⚠️ Wrong Email ID format!");
                 } else {
-                    showAuthError("⚠️ Registration Failed: " + (err?.message || "Please try again."));
+                    showError("⚠️ Registration Failed: " + (error?.message || "Please try again."));
                 }
             }
         });
@@ -256,11 +347,33 @@
 </head>
 <body class="bg-gradient-to-br from-indigo-600 to-purple-800 min-h-screen flex items-center justify-center p-4 font-sans text-gray-800">
 
+    <!-- Dynamic Splash Screen -->
+    <div id="salonSplashScreen" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white transition-opacity duration-500 p-6 text-center">
+        <img id="splashImageEl" src="" alt="Splash Screen" class="hide max-h-64 max-w-xs rounded-3xl object-contain shadow-2xl mb-4">
+        <h2 id="splashAppTitle" class="text-xl font-extrabold tracking-wide">Salon App</h2>
+        <p class="text-xs text-slate-400 mt-1">Loading your salon experience...</p>
+    </div>
+
+    <!-- Install App Banner -->
+    <div id="installAppBanner" class="hide fixed bottom-4 left-4 right-4 z-40 max-w-md mx-auto bg-slate-900 text-white border border-slate-700 rounded-2xl p-3.5 shadow-2xl flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3 min-w-0">
+            <img id="bannerAppIcon" src="" alt="App Icon" class="hide w-11 h-11 rounded-xl object-cover shrink-0">
+            <div class="min-w-0">
+                <p id="bannerAppName" class="text-xs font-bold truncate">Install Salon App</p>
+                <p id="bannerAppHint" class="text-[10px] text-slate-400 truncate">Add to Home Screen for quick booking</p>
+            </div>
+        </div>
+        <button id="installAppBtn" type="button" class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shrink-0 cursor-pointer">
+            Install
+        </button>
+    </div>
+
     <div class="bg-white w-full max-w-md p-8 rounded-3xl shadow-2xl space-y-6">
         <div class="text-center">
             <div class="bg-indigo-100 text-indigo-600 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl font-bold shadow-inner">
                 <i class="fa-solid fa-scissors"></i>
             </div>
+            <p id="brandAppTitle" class="text-[11px] font-bold uppercase tracking-wider text-indigo-600 mb-0.5">Salon App</p>
             <h2 id="screenTitle" class="text-2xl font-bold text-gray-900">Welcome Back</h2>
             <p id="screenSubtitle" class="text-xs text-gray-500 mt-1">Login to your user account</p>
         </div>
