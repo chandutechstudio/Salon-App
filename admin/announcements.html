@@ -43,6 +43,16 @@
             return slug;
         }
 
+        function syncPageLinks(slug) {
+            const cleanSlug = normalizeSalonId(slug);
+            document.querySelectorAll("a[data-nav-page]").forEach((a) => {
+                const target = a.getAttribute("data-nav-page");
+                if (target && cleanSlug) {
+                    a.href = `${target}?salon=${encodeURIComponent(cleanSlug)}`;
+                }
+            });
+        }
+
         function getAnnouncementsRef() {
             return getSalonSubcollectionRef(salonId, "announcements");
         }
@@ -119,7 +129,8 @@
                 window.location.href = "index.html";
                 return;
             }
-            document.getElementById("activeSlugHeader").innerText = `Salon: ${salonId}`;
+            syncPageLinks(salonId);
+            document.getElementById("activeSlugHeader").innerText = "Cloud synced";
             listenAnnouncements();
         });
     </script>
@@ -130,13 +141,13 @@
 
         <header class="bg-blue-600 text-white p-6 rounded-3xl shadow-md flex justify-between items-center">
             <div class="flex items-center gap-3">
-                <a href="settings.html" class="bg-white/20 hover:bg-white/30 text-white p-2.5 rounded-xl transition"><i class="fa-solid fa-arrow-left text-sm"></i></a>
+                <a data-nav-page="settings.html" href="settings.html" class="bg-white/20 hover:bg-white/30 text-white p-2.5 rounded-xl transition"><i class="fa-solid fa-arrow-left text-sm"></i></a>
                 <div>
                     <h1 class="text-xl font-bold">Manage Announcements</h1>
-                    <p class="text-xs text-blue-100 mt-0.5"><span id="activeSlugHeader">Syncing salon...</span></p>
+                    <p class="text-xs text-blue-100 mt-0.5"><span id="activeSlugHeader">Syncing...</span></p>
                 </div>
             </div>
-            <a href="settings.html" class="bg-white text-blue-700 px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-blue-50 transition">Settings</a>
+            <a data-nav-page="settings.html" href="settings.html" class="bg-white text-blue-700 px-4 py-2 rounded-xl text-xs font-bold shadow hover:bg-blue-50 transition">Settings</a>
         </header>
 
         <div class="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
