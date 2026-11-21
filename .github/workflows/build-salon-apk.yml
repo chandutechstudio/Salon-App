@@ -20,6 +20,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.4"
+
       - name: Inject Salon App Name, URL & Icons
         working-directory: android-builder
         shell: python3
@@ -30,10 +35,10 @@ jobs:
           LOGO_DATA_URL: ${{ github.event.client_payload.logoUrl }}
           SPLASH_DATA_URL: ${{ github.event.client_payload.splashUrl }}
         run: |
-          import os, base64, re
+          import os, base64, re, struct, zlib
 
-          app_name = (os.environ.get("APP_NAME") or "Salon App").replace("&", "&amp;").replace("<", "&lt;")
-          user_url = (os.environ.get("USER_APP_URL") or "").replace("&", "&amp;")
+          app_name = (os.environ.get("APP_NAME") or "Salon App").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+          user_url = (os.environ.get("USER_APP_URL") or "https://example.com").replace("&", "&amp;")
 
           strings_path = "app/src/main/res/values/strings.xml"
           with open(strings_path, "r", encoding="utf-8") as f:
@@ -48,6 +53,16 @@ jobs:
           with open(strings_path, "w", encoding="utf-8") as f:
               f.write(content)
 
+          def make_fallback_png(out_path):
+              os.makedirs(os.path.dirname(out_path), exist_ok=True)
+              w, h = 64, 64
+              raw = b"".join(b"\x00" + b"\x4f\x46\xe5\xff" * w for _ in range(h))
+              def chunk(tag, data):
+                  return struct.pack("!I", len(data)) + tag + data + struct.pack("!I", zlib.crc32(tag + data) & 0xffffffff)
+              png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!IIBBBBB", w, h, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+              with open(out_path, "wb") as f:
+                  f.write(png)
+
           def save_data_url(data_url, out_path):
               if not data_url or "," not in data_url:
                   return False
@@ -58,15 +73,17 @@ jobs:
                   img_f.write(raw)
               return True
 
-          save_data_url(os.environ.get("LOGO_DATA_URL", ""), "app/src/main/res/drawable/salon_logo.jpg")
-          if not save_data_url(os.environ.get("SPLASH_DATA_URL", ""), "app/src/main/res/drawable/salon_splash.jpg"):
-              save_data_url(os.environ.get("LOGO_DATA_URL", ""), "app/src/main/res/drawable/salon_splash.jpg")
+          if not save_data_url(os.environ.get("LOGO_DATA_URL", ""), "app/src/main/res/drawable/salon_logo.jpg"):
+              make_fallback_png("app/src/main/res/drawable/salon_logo.png")
 
-      - name: Build APK with Gradle
+          if not save_data_url(os.environ.get("SPLASH_DATA_URL", ""), "app/src/main/res/drawable/salon_splash.jpg"):
+              if os.path.exists("app/src/main/res/drawable/salon_logo.jpg"):
+                  with open("app/src/main/res/drawable/salon_logo.jpg", "rb") as src, open("app/src/main/res/drawable/salon_splash.jpg", "wb") as dst:
+                      dst.write(src.read())
+
+      - name: Build Debug APK
         working-directory: android-builder
-        run: |
-          chmod +x ./gradlew
-          ./gradlew assembleDebug
+        run: gradle assembleDebug
 
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v2
@@ -76,4 +93,3 @@ jobs:
           files: android-builder/app/build/outputs/apk/debug/app-debug.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
