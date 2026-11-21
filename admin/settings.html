@@ -17,7 +17,7 @@
 
         function buildCustomerBookingLink(slug) {
             const cleanSlug = normalizeSalonId(slug);
-            const rootUrl = new URL("../index.html", window.location.href);
+            const rootUrl = new URL("../User/index.html", window.location.href);
             if (cleanSlug) {
                 rootUrl.searchParams.set("salon", cleanSlug);
             }
