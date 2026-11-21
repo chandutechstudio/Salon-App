@@ -190,7 +190,7 @@
             unsubscribers.push(
                 onSnapshot(getSalonDocRef(salonId), async (snap) => {
                     latestSalonData = snap.exists() ? snap.data() : null;
-                    const displayTitle = latestSalonData?.salonName ? latestSalonData.salonName : salonId;
+                    const displayTitle = latestSalonData?.salonName ? latestSalonData.salonName : "Admin";
                     document.getElementById("adminWelcomeName").innerText = displayTitle;
                     await syncSubscriptionState();
                 })
@@ -226,16 +226,16 @@
             resolvedSalonSlug = salonId;
             sessionStorage.setItem("activeSalonId", salonId);
 
+            // Silent background sync of customer booking link
+            const customerBookingUrl = buildSalonUrl("../User/index.html", salonId);
+            sessionStorage.setItem("customerBookingLink", customerBookingUrl);
+
             const params = new URLSearchParams(window.location.search);
             if (params.get("salon") !== salonId) {
                 const cleanUrl = new URL(window.location.href);
                 cleanUrl.searchParams.set("salon", salonId);
                 window.history.replaceState({}, document.title, cleanUrl.toString());
             }
-
-            document.getElementById("adminWelcomeName").innerText = salonId;
-            document.getElementById("activeSalonIdBadge").innerText = `Salon Slug: ${salonId}`;
-            document.getElementById("customerShareLink").value = buildSalonUrl("../User/index.html", salonId);
 
             const settingsLink = document.getElementById("goToSettingsBtn");
             if (settingsLink) settingsLink.href = `settings.html?salon=${encodeURIComponent(salonId)}`;
@@ -301,13 +301,6 @@
             }
         };
 
-        window.copyCustomerLink = function() {
-            const input = document.getElementById("customerShareLink");
-            input.select();
-            navigator.clipboard?.writeText(input.value).catch(() => {});
-            alert("Customer booking link copied!");
-        };
-
         window.adminLogout = async function() {
             clearAdminSession();
             try { await signOut(auth); } catch (_) {}
@@ -322,7 +315,7 @@
         <header class="bg-indigo-600 text-white p-6 rounded-3xl shadow-md flex flex-col md:flex-row justify-between items-center gap-6">
             <div class="space-y-1 text-center md:text-left">
                 <h1 class="text-2xl font-bold"><i class="fa-solid fa-chart-line mr-1"></i> Admin Dashboard</h1>
-                <p class="text-xs text-indigo-200">Welcome back, <span id="adminWelcomeName" class="font-bold text-white">Admin</span>! <span id="activeSalonIdBadge" class="ml-1 bg-white/15 px-2 py-0.5 rounded"></span></p>
+                <p class="text-xs text-indigo-200">Welcome back, <span id="adminWelcomeName" class="font-bold text-white">Admin</span>!</p>
             </div>
 
             <div class="bg-white text-gray-800 p-4 rounded-2xl shadow-inner flex flex-col items-center text-center w-full md:w-72 space-y-2 border-2 border-green-500">
@@ -342,16 +335,6 @@
                 </button>
             </div>
         </header>
-
-        <div class="bg-white p-4 rounded-2xl border border-indigo-100 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-            <div class="flex-1 min-w-0">
-                <p class="text-[11px] font-bold text-gray-500 uppercase">Your Salon Customer Booking Link</p>
-                <input id="customerShareLink" type="text" readonly class="w-full mt-1 px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs font-semibold text-indigo-700 outline-none">
-            </div>
-            <button onclick="copyCustomerLink()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs transition shrink-0 cursor-pointer">
-                <i class="fa-solid fa-copy mr-1"></i> Copy Link
-            </button>
-        </div>
 
         <div>
             <a id="goToSettingsBtn" href="settings.html" class="w-full bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold py-3 px-6 rounded-2xl text-xs transition shadow-sm flex items-center justify-center gap-2">
