@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salon App - Category Services</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <script type="module">
+        import { signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { auth, resolveActiveSalonId, buildSalonUrl, getSalonSubcollectionRef } from "./tenant.js";
+
+        const activeSalonId = resolveActiveSalonId({ persist: true });
+
+        function syncLinks() {
+            document.querySelectorAll("a[href]").forEach((link) => {
+                const href = link.getAttribute("href");
+                if (!href || href.startsWith("http") || href.startsWith("#")) return;
+                const base = href.split("?")[0];
+                link.setAttribute("href", buildSalonUrl(base, activeSalonId));
+            });
+        }
+        syncLinks();
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const categoryFromUrl = urlParams.get("category");
+        const activeCategory = (categoryFromUrl && categoryFromUrl.trim() !== "")
+            ? categoryFromUrl.trim()
+            : "All Services";
+
+        document.getElementById("categoryHeading").innerText = activeCategory;
+        document.title = `Salon App - ${activeCategory}`;
+
+        window.goToBooking = function(serviceInfo) {
+            window.location.href = buildSalonUrl("booking.html", activeSalonId, { service: serviceInfo });
+        };
+
+        window.switchCategory = function(categoryName) {
+            const clean = String(categoryName || "").trim();
+            window.location.href = buildSalonUrl("category.html", activeSalonId, { category: clean });
+        };
+
+        window.logout = async function() {
+            sessionStorage.clear();
+            try { await signOut(auth); } catch (_) {}
+            window.location.href = buildSalonUrl("index.html", activeSalonId);
+        };
+
+        if (!activeSalonId) {
+            document.getElementById("serviceCountText").innerText = "Salon not selected";
+            document.getElementById("categoryServicesContainer").innerHTML =
+                `<p class="text-xs text-gray-400 text-center py-6">Please open via salon booking link.</p>`;
+        } else {
+            onSnapshot(getSalonSubcollectionRef(activeSalonId, "categories"), (snap) => {
+                const pillsContainer = document.getElementById("categoryPillsContainer");
+                let pillsHtml = `
+                    <button 
+                        onclick="switchCategory('All Services')" 
+                        class="px-3.5 py-1.5 rounded-full text-[11px] font-bold shrink-0 transition ${activeCategory.toLowerCase() === "all services" ? "bg-indigo-600 text-white shadow-sm" : "bg-white text-gray-700 border border-gray-200 hover:border-indigo-300"}"
+                    >
+                        All
+                    </button>
+                `;
+
+                snap.forEach((docSnap) => {
+                    const c = docSnap.data();
+                    const name = String(c.name || "").trim();
+                    if (!name) return;
+                    const isSelected = name.toLowerCase() === activeCategory.toLowerCase();
+                    const safeName = name.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+                    pillsHtml += `
+                        <button 
+                            onclick="switchCategory('${safeName}')" 
+                            class="px-3.5 py-1.5 rounded-full text-[11px] font-bold shrink-0 transition ${isSelected ? "bg-indigo-600 text-white shadow-sm" : "bg-white text-gray-700 border border-gray-200 hover:border-indigo-300"}"
+                        >
+                            ${name}
+                        </button>
+                    `;
+                });
+                pillsContainer.innerHTML = pillsHtml;
+            });
+
+            onSnapshot(getSalonSubcollectionRef(activeSalonId, "services"), (snap) => {
+                const container = document.getElementById("categoryServicesContainer");
+                const countEl = document.getElementById("serviceCountText");
+                const services = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+
+                const targetLower = activeCategory.toLowerCase();
+                const filtered = (targetLower === "all services" || targetLower === "all")
+                    ? services
+                    : services.filter((s) => String(s.category || "").trim().toLowerCase() === targetLower);
+
+                countEl.innerText = `${filtered.length} ${filtered.length === 1 ? "Service" : "Services"} Available`;
+
+                if (filtered.length === 0) {
+                    container.innerHTML = `
+                        <div class="bg-white border border-gray-100 rounded-3xl p-6 text-center space-y-3 shadow-sm">
+                            <div class="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto text-lg">
+                                <i class="fa-solid fa-scissors"></i>
+                            </div>
+                            <h5 class="text-sm font-bold text-gray-800">No services in "${activeCategory}"</h5>
+                            <p class="text-xs text-gray-400">You can still proceed to booking or explore other categories above.</p>
+                            <button 
+                                onclick="goToBooking('${String(activeCategory).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}')" 
+                                class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl shadow-sm transition"
+                            >
+                                Book Now
+                            </button>
+                        </div>
+                    `;
+                    return;
+                }
+
+                let html = "";
+                filtered.forEach((s) => {
+                    const serviceName = s.name || "Salon Service";
+                    const servicePrice = s.price ?? 0;
+                    const serviceTime = s.time || "30 mins";
+                    const serviceCategory = s.category || activeCategory;
+                    const serviceLabel = `${serviceName} - ₹${servicePrice}`;
+                    const safeLabel = String(serviceLabel).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
+                    html += `
+                        <div class="bg-white border border-gray-100 rounded-2xl p-3.5 shadow-sm flex items-center justify-between gap-3">
+                            <div class="flex items-start gap-3 min-w-0">
+                                <img 
+                                    src="${s.image || "https://cdn-icons-png.flaticon.com/512/3067/3067451.png"}" 
+                                    class="w-14 h-14 object-cover bg-indigo-50 p-1.5 rounded-2xl border border-indigo-100 shrink-0" 
+                                    alt="${serviceName}"
+                                    onerror="this.src='https://cdn-icons-png.flaticon.com/512/3067/3067451.png'"
+                                >
+                                <div class="min-w-0">
+                                    <h5 class="font-bold text-xs text-gray-900 truncate">${serviceName}</h5>
+                                    <p class="text-[10px] text-gray-500 mt-0.5">
+                                        <i class="fa-solid fa-clock mr-1 text-indigo-500"></i>${serviceTime} • <span class="font-medium text-gray-600">${serviceCategory}</span>
+                                    </p>
+                                    ${s.description ? `<p class="text-[10px] text-gray-400 line-clamp-2 mt-1">${s.description}</p>` : ""}
+                                    <p class="font-bold text-xs text-indigo-600 mt-1.5">₹${servicePrice}</p>
+                                </div>
+                            </div>
+                            <button 
+                                type="button"
+                                onclick="goToBooking('${safeLabel}')" 
+                                class="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-[11px] font-bold px-3.5 py-2 rounded-xl shadow-sm shrink-0 transition cursor-pointer"
+                            >
+                                Book Now
+                            </button>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html;
+            });
+        }
+    </script>
+</head>
+<body class="bg-gray-100 font-sans text-gray-800 pb-24">
+
+    <header class="bg-white p-4 sticky top-0 z-40 border-b border-gray-100 flex justify-between items-center max-w-md mx-auto">
+        <div class="flex items-center gap-3 min-w-0">
+            <a href="home.html" class="w-8 h-8 rounded-xl bg-gray-100 hover:bg-indigo-50 text-gray-700 hover:text-indigo-600 flex items-center justify-center transition shrink-0" aria-label="Back to Home">
+                <i class="fa-solid fa-arrow-left text-xs"></i>
+            </a>
+            <div class="min-w-0">
+                <p id="serviceCountText" class="text-[10px] text-indigo-600 font-semibold uppercase tracking-wider">Loading...</p>
+                <h1 id="categoryHeading" class="text-sm font-bold text-gray-900 truncate">Category</h1>
+            </div>
+        </div>
+        <button onclick="logout()" class="text-gray-400 hover:text-red-500 p-1.5 transition shrink-0" title="Logout">
+            <i class="fa-solid fa-right-from-bracket text-sm"></i>
+        </button>
+    </header>
+
+    <main class="max-w-md mx-auto p-4 space-y-4">
+        <div id="categoryPillsContainer" class="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar"></div>
+        <div id="categoryServicesContainer" class="space-y-3"></div>
+    </main>
+
+    <nav class="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-gray-100 px-6 py-2.5 flex justify-between items-center z-50">
+        <a href="home.html" class="flex flex-col items-center text-indigo-600"><i class="fa-solid fa-house text-base"></i><span class="text-[10px] font-bold mt-0.5">Home</span></a>
+        <a href="booking.html" class="flex flex-col items-center text-gray-400 hover:text-indigo-600"><i class="fa-solid fa-calendar-check text-base"></i><span class="text-[10px] font-semibold mt-0.5">Booking</span></a>
+        <a href="status.html" class="flex flex-col items-center text-gray-400 hover:text-indigo-600"><i class="fa-solid fa-clock-rotate-left text-base"></i><span class="text-[10px] font-semibold mt-0.5">Status</span></a>
+        <a href="history.html" class="flex flex-col items-center text-gray-400 hover:text-indigo-600"><i class="fa-solid fa-receipt text-base"></i><span class="text-[10px] font-semibold mt-0.5">History</span></a>
+        <a href="profile.html" class="flex flex-col items-center text-gray-400 hover:text-indigo-600"><i class="fa-solid fa-user text-base"></i><span class="text-[10px] font-semibold mt-0.5">Profile</span></a>
+    </nav>
+
+</body>
+</html>

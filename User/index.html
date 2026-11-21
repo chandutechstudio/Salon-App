@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salon App - Login / Register</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>.hide { display: none !important; }</style>
+
+    <script type="module">
+        import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { auth, resolveActiveSalonId, buildSalonUrl, getCustomerDocRef } from "./tenant.js";
+
+        let activeSalonId = resolveActiveSalonId({ persist: true });
+
+        function updateSalonHeaderUI() {
+            const badge = document.getElementById("activeSalonText");
+            if (!badge) return;
+            badge.innerText = activeSalonId ? activeSalonId : "Open via Salon Link (?salon=...)";
+        }
+
+        window.addEventListener("DOMContentLoaded", () => {
+            activeSalonId = resolveActiveSalonId({ persist: true }) || activeSalonId;
+            updateSalonHeaderUI();
+        });
+
+        function getPostAuthRedirectUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const rawNext = (params.get("next") || "").trim();
+            const safePages = ["home.html", "booking.html", "payment.html", "category.html", "status.html", "history.html", "profile.html", "success.html"];
+            const targetPage = safePages.includes(rawNext) ? rawNext : "home.html";
+            return buildSalonUrl(targetPage, activeSalonId);
+        }
+
+        window.switchAuthView = function(view) {
+            const loginF = document.getElementById("loginForm");
+            const regF = document.getElementById("registerForm");
+            const title = document.getElementById("screenTitle");
+            const subtitle = document.getElementById("screenSubtitle");
+            const errorBox = document.getElementById("authError");
+
+            loginF.classList.add("hide");
+            regF.classList.add("hide");
+            errorBox.classList.add("hide");
+
+            if (view === "login") {
+                loginF.classList.remove("hide");
+                title.innerText = "Welcome Back";
+                subtitle.innerText = "Login to your user account";
+            } else if (view === "register") {
+                regF.classList.remove("hide");
+                title.innerText = "Create Account";
+                subtitle.innerText = "Sign up for new booking experience";
+            }
+        };
+
+        function showError(msg) {
+            const errorBox = document.getElementById("authError");
+            errorBox.innerText = msg;
+            errorBox.classList.remove("hide");
+        }
+
+        async function syncCustomerToSalon(user, name, email) {
+            const salonId = resolveActiveSalonId({ persist: true }) || activeSalonId;
+            if (!salonId || !user) return;
+            await setDoc(
+                getCustomerDocRef(salonId, user.uid),
+                {
+                    uid: user.uid,
+                    name: name || user.displayName || email.split("@")[0],
+                    email: email.toLowerCase(),
+                    salonId,
+                    updatedAt: serverTimestamp()
+                },
+                { merge: true }
+            ).catch((err) => console.warn("Customer sync warning:", err));
+        }
+
+        document.getElementById("loginForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const email = document.getElementById("loginEmail").value.trim().toLowerCase();
+            const pass = document.getElementById("loginPass").value.trim();
+
+            try {
+                const userCredential = await signInWithEmailAndPassword(auth, email, pass);
+                const resolvedName = userCredential.user.displayName || email.split("@")[0];
+                sessionStorage.setItem("salonCustomerName", resolvedName);
+                sessionStorage.setItem("salonCustomerEmail", email);
+
+                await syncCustomerToSalon(userCredential.user, resolvedName, email);
+                window.location.href = getPostAuthRedirectUrl();
+            } catch (error) {
+                console.error(error.code);
+                if (error.code === "auth/user-not-found" || error.code === "auth/invalid-credential" || error.code === "auth/invalid-email") {
+                    showError("⚠️ Is email se account nahi bana hai! Kripya pehle Register karein.");
+                } else if (error.code === "auth/wrong-password") {
+                    showError("⚠️ Wrong Password! Password galat hai.");
+                } else {
+                    showError("⚠️ Login Failed: " + error.message);
+                }
+            }
+        });
+
+        document.getElementById("registerForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const name = document.getElementById("regName").value.trim();
+            const email = document.getElementById("regEmail").value.trim().toLowerCase();
+            const pass = document.getElementById("regPass").value.trim();
+
+            if (pass.length < 6) {
+                showError("⚠️ Password kam se kam 6 characters ka hona chahiye!");
+                return;
+            }
+
+            try {
+                const cred = await createUserWithEmailAndPassword(auth, email, pass);
+                if (name) {
+                    await updateProfile(cred.user, { displayName: name }).catch(() => {});
+                }
+
+                sessionStorage.setItem("salonCustomerName", name || email.split("@")[0]);
+                sessionStorage.setItem("salonCustomerEmail", email);
+
+                await syncCustomerToSalon(cred.user, name, email);
+                window.location.href = getPostAuthRedirectUrl();
+            } catch (error) {
+                console.error(error.code);
+                if (error.code === "auth/email-already-in-use") {
+                    showError("⚠️ Already Account exists with this email! Kripya Login karein.");
+                } else if (error.code === "auth/invalid-email") {
+                    showError("⚠️ Wrong Email ID format!");
+                } else {
+                    showError("⚠️ Registration Failed: " + error.message);
+                }
+            }
+        });
+    </script>
+</head>
+<body class="bg-gradient-to-br from-indigo-600 to-purple-800 min-h-screen flex items-center justify-center p-4 font-sans text-gray-800">
+
+    <div class="bg-white w-full max-w-md p-8 rounded-3xl shadow-2xl space-y-6">
+        <div class="text-center">
+            <div class="bg-indigo-100 text-indigo-600 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl font-bold shadow-inner">
+                <i class="fa-solid fa-scissors"></i>
+            </div>
+            <h2 id="screenTitle" class="text-2xl font-bold text-gray-900">Welcome Back</h2>
+            <p id="screenSubtitle" class="text-xs text-gray-500 mt-1">Login to your user account</p>
+            <p class="text-[11px] text-indigo-600 font-semibold mt-2 bg-indigo-50 inline-block px-3 py-1 rounded-full">
+                Salon: <span id="activeSalonText">Checking...</span>
+            </p>
+        </div>
+
+        <div id="authError" class="hide bg-red-50 border border-red-200 text-red-600 text-xs font-semibold p-3 rounded-xl text-center shadow-sm"></div>
+
+        <form id="loginForm" class="space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Email ID</label>
+                <input type="email" id="loginEmail" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="user@gmail.com">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Password</label>
+                <input type="password" id="loginPass" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="••••••••">
+            </div>
+            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm">Login</button>
+
+            <p class="text-center text-xs text-gray-500 pt-2">
+                Don't have an account? <button type="button" onclick="switchAuthView('register')" class="text-indigo-600 font-bold hover:underline">Register</button>
+            </p>
+        </form>
+
+        <form id="registerForm" class="hide space-y-4">
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Full Name</label>
+                <input type="text" id="regName" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Chandu Agariya">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Email ID</label>
+                <input type="email" id="regEmail" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="user@gmail.com">
+            </div>
+            <div>
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Create Password (Min 6 chars)</label>
+                <input type="password" id="regPass" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="••••••••">
+            </div>
+            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm">Register Account</button>
+
+            <p class="text-center text-xs text-gray-500 pt-2">
+                Already have an account? <button type="button" onclick="switchAuthView('login')" class="text-indigo-600 font-bold hover:underline">Login</button>
+            </p>
+        </form>
+    </div>
+</body>
+</html>
