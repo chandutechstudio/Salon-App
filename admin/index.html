@@ -9,9 +9,9 @@
     <style>.hide { display: none !important; }</style>
 
     <script type="module">
-        import { getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { auth, salonNameToSlug, normalizeSalonId, getSalonDocRef, getSubscriptionDocRef } from "./tenant.js";
+        import { getDoc, setDoc, collection, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { signInWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { auth, db, normalizeSalonId, getSalonDocRef, resolveCanonicalSalonId } from "./tenant.js";
 
         function saveAdminSession(salonSlug, ownerEmail, salonName = "") {
             sessionStorage.setItem("activeSalonId", salonSlug);
@@ -23,7 +23,6 @@
 
         window.switchView = function(viewName) {
             document.getElementById("adminLoginForm").classList.add("hide");
-            document.getElementById("signupForm").classList.add("hide");
             document.getElementById("forgetForm").classList.add("hide");
             document.getElementById("authError").classList.add("hide");
 
@@ -31,25 +30,68 @@
                 document.getElementById("adminLoginForm").classList.remove("hide");
                 document.getElementById("authTitle").innerText = "Admin Portal";
                 document.getElementById("authSubtitle").innerText = "Sign in to manage your salon dashboard";
-            } else if (viewName === "signup") {
-                document.getElementById("signupForm").classList.remove("hide");
-                document.getElementById("authTitle").innerText = "Create New Account";
-                document.getElementById("authSubtitle").innerText = "Register your salon & get 7 Days Free Trial";
             } else if (viewName === "forget") {
                 document.getElementById("forgetForm").classList.remove("hide");
                 document.getElementById("authTitle").innerText = "Recover Password";
-                document.getElementById("authSubtitle").innerText = "We will send a reset link to your Gmail";
+                document.getElementById("authSubtitle").innerText = "We will send a reset link to your registered email";
             }
         };
 
+        async function resolveLoginEmail(userIdInput, salonSlugHint = "") {
+            const raw = userIdInput.trim();
+            if (raw.includes("@")) {
+                return { email: raw.toLowerCase(), salonSlug: normalizeSalonId(salonSlugHint) };
+            }
+
+            if (raw.toLowerCase() === "admin") {
+                const params = new URLSearchParams(window.location.search);
+                const rawSlug =
+                    salonSlugHint ||
+                    params.get("salon") ||
+                    localStorage.getItem("lastPurchasedSalonSlug") ||
+                    "";
+                const targetSlug = rawSlug ? await resolveCanonicalSalonId(rawSlug) : "";
+
+                if (targetSlug) {
+                    const salonSnap = await getDoc(getSalonDocRef(targetSlug));
+                    if (salonSnap.exists() && salonSnap.data()?.ownerEmail) {
+                        return {
+                            email: salonSnap.data().ownerEmail.trim().toLowerCase(),
+                            salonSlug: targetSlug
+                        };
+                    }
+                }
+
+                const q = query(collection(db, "salons"), where("defaultUserId", "==", "Admin"));
+                const snap = await getDocs(q);
+                let latestDoc = null;
+                snap.forEach((d) => {
+                    const data = d.data();
+                    if (data?.ownerEmail) {
+                        if (!latestDoc || (data.createdAtMs || 0) > (latestDoc.createdAtMs || 0)) {
+                            latestDoc = data;
+                        }
+                    }
+                });
+                if (latestDoc?.ownerEmail) {
+                    const canonical = await resolveCanonicalSalonId(latestDoc.salonId || "");
+                    return {
+                        email: latestDoc.ownerEmail.trim().toLowerCase(),
+                        salonSlug: canonical || normalizeSalonId(latestDoc.salonId || "")
+                    };
+                }
+            }
+            return { email: "", salonSlug: "" };
+        }
+
         document.getElementById("adminLoginForm").addEventListener("submit", async (e) => {
             e.preventDefault();
-            const ownerEmail = document.getElementById("loginEmail").value.trim().toLowerCase();
+            const userIdInput = document.getElementById("loginUserId").value.trim();
             const pass = document.getElementById("loginPass").value.trim();
             const btn = e.target.querySelector('button[type="submit"]');
 
-            if (!ownerEmail || !ownerEmail.includes("@")) {
-                showError("Valid email enter karein.");
+            if (!userIdInput || !pass) {
+                showError("User ID aur Password enter karein.");
                 return;
             }
 
@@ -57,19 +99,32 @@
             clearError();
 
             try {
+                const resolved = await resolveLoginEmail(userIdInput);
+                const ownerEmail = resolved.email;
+
+                if (!ownerEmail || !ownerEmail.includes("@")) {
+                    showError("Account nahi mila! Kripya apna registered Email ya sahi Admin Link use karein.");
+                    setLoading(btn, false, "Login to Dashboard");
+                    return;
+                }
+
                 await signInWithEmailAndPassword(auth, ownerEmail, pass);
 
                 const emailSlug = normalizeSalonId(ownerEmail);
-                let salonSlug = emailSlug;
+                let salonSlug = resolved.salonSlug || emailSlug;
                 let salonName = "";
 
                 const emailDoc = await getDoc(getSalonDocRef(emailSlug));
                 if (emailDoc.exists()) {
                     const data = emailDoc.data() || {};
                     if (data.linkedSalonSlug) {
-                        salonSlug = normalizeSalonId(data.linkedSalonSlug) || emailSlug;
+                        salonSlug = normalizeSalonId(data.linkedSalonSlug) || salonSlug;
                     }
                     salonName = data.salonName || "";
+                }
+
+                if (salonSlug) {
+                    salonSlug = await resolveCanonicalSalonId(salonSlug);
                 }
 
                 await setDoc(getSalonDocRef(salonSlug), {
@@ -82,76 +137,8 @@
                 window.location.href = `dashboard.html?salon=${encodeURIComponent(salonSlug)}`;
             } catch (error) {
                 console.error("Login Error:", error);
-                showError("Galat Email ya Password! Kripya dobara koshish karein.");
+                showError("Galat User ID ya Password! Kripya dobara koshish karein.");
                 setLoading(btn, false, "Login to Dashboard");
-            }
-        });
-
-        document.getElementById("signupForm").addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const salonName = document.getElementById("signupSalonName").value.trim();
-            const ownerEmail = document.getElementById("signupEmail").value.trim().toLowerCase();
-            const pass = document.getElementById("signupPass").value.trim();
-            const btn = e.target.querySelector('button[type="submit"]');
-
-            const salonSlug = salonNameToSlug(salonName);
-            const emailSlug = normalizeSalonId(ownerEmail);
-
-            if (!salonSlug) {
-                showError("Valid Salon Name enter karein.");
-                return;
-            }
-            if (!ownerEmail || !ownerEmail.includes("@")) {
-                showError("Valid email enter karein.");
-                return;
-            }
-            if (pass.length < 6) {
-                showError("Password kam se kam 6 characters ka hona chahiye!");
-                return;
-            }
-
-            setLoading(btn, true, "Creating Account...");
-            clearError();
-
-            try {
-                const cred = await createUserWithEmailAndPassword(auth, ownerEmail, pass);
-
-                await setDoc(getSubscriptionDocRef(salonSlug), {
-                    salonId: salonSlug,
-                    salonName,
-                    ownerEmail,
-                    status: "Active",
-                    plan: "7 Days Free Trial",
-                    trialClaimed: false,
-                    createdAt: serverTimestamp()
-                }, { merge: true });
-
-                await setDoc(getSalonDocRef(salonSlug), {
-                    salonId: salonSlug,
-                    salonName,
-                    ownerUid: cred.user.uid,
-                    ownerEmail,
-                    createdAt: serverTimestamp()
-                }, { merge: true });
-
-                await setDoc(getSalonDocRef(emailSlug), {
-                    linkedSalonSlug: salonSlug,
-                    salonName,
-                    ownerUid: cred.user.uid,
-                    ownerEmail,
-                    updatedAt: serverTimestamp()
-                }, { merge: true });
-
-                saveAdminSession(salonSlug, ownerEmail, salonName);
-                window.location.href = `subscription.html?salon=${encodeURIComponent(salonSlug)}`;
-            } catch (error) {
-                console.error("Signup Error:", error);
-                if (error.code === "auth/email-already-in-use") {
-                    showError("Yeh email pehle se registered hai! Kripya Login karein.");
-                } else {
-                    showError("Registration failed: " + error.message);
-                }
-                setLoading(btn, false, "Register & Get Free Trial");
             }
         });
 
@@ -211,38 +198,17 @@
 
         <form id="adminLoginForm" class="space-y-4">
             <div>
-                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Admin Email</label>
-                <input type="email" id="loginEmail" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="owner@salon.com">
+                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">User ID or Admin Email</label>
+                <input type="text" id="loginUserId" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Admin or owner@salon.com">
             </div>
             <div>
                 <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Password</label>
                 <input type="password" id="loginPass" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="••••••••">
             </div>
-            <div class="flex justify-between items-center text-xs">
-                <button type="button" onclick="switchView('signup')" class="text-indigo-600 font-bold hover:underline">Create New Account</button>
-                <button type="button" onclick="switchView('forget')" class="text-gray-500 hover:underline">Forgot Password?</button>
+            <div class="flex justify-end items-center text-xs">
+                <button type="button" onclick="switchView('forget')" class="text-gray-500 hover:underline font-medium">Forgot Password?</button>
             </div>
-            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm">Login to Dashboard</button>
-        </form>
-
-        <form id="signupForm" class="hide space-y-4">
-            <div>
-                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Salon Name</label>
-                <input type="text" id="signupSalonName" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Royal Looks Salon">
-            </div>
-            <div>
-                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Admin Email</label>
-                <input type="email" id="signupEmail" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="owner@salon.com">
-            </div>
-            <div>
-                <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Create Password (Min 6 chars)</label>
-                <input type="password" id="signupPass" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="••••••••">
-            </div>
-            <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm">Register & Get Free Trial</button>
-
-            <p class="text-center text-xs text-gray-500 pt-1">
-                Already have an account? <button type="button" onclick="switchView('login')" class="text-indigo-600 font-bold hover:underline">Login here</button>
-            </p>
+            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm cursor-pointer">Login to Dashboard</button>
         </form>
 
         <form id="forgetForm" class="hide space-y-4">
@@ -250,7 +216,7 @@
                 <label class="block text-xs font-semibold text-gray-600 uppercase mb-1">Enter Registered Email</label>
                 <input type="email" id="forgetEmail" required class="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500" placeholder="owner@salon.com">
             </div>
-            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm">Send Recovery Email</button>
+            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition shadow-lg text-sm cursor-pointer">Send Recovery Email</button>
 
             <p class="text-center text-xs text-gray-500 pt-1">
                 Remember credentials? <button type="button" onclick="switchView('login')" class="text-indigo-600 font-bold hover:underline">Back to Login</button>
