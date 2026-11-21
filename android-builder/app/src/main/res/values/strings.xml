@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Salon Booking App</string>
+    <string name="target_url">https://example.com</string>
+</resources>
