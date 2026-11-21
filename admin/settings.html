@@ -6,10 +6,17 @@
     <title>Salon Admin - Control & Settings</title>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>.hide { display: none !important; }</style>
 
     <script type="module">
+        import { getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
         import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { auth, normalizeSalonId, verifyAdminSalonAccess } from "./tenant.js";
+        import { auth, normalizeSalonId, verifyAdminSalonAccess, getSalonDocRef } from "./tenant.js";
+
+        let activeSalonSlug = "";
+        let uploadedLogoDataUrl = "";
+        let uploadedSplashDataUrl = "";
+        let splashSkipped = false;
 
         function syncAdminMenuLinks(slug) {
             const cleanSlug = normalizeSalonId(slug);
@@ -25,6 +32,188 @@
             });
         }
 
+        function compressImageFile(file, maxWidth = 512, maxHeight = 512) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        let width = img.width;
+                        let height = img.height;
+
+                        const ratio = Math.min(maxWidth / width, maxHeight / height, 1);
+                        width = Math.max(1, Math.round(width * ratio));
+                        height = Math.max(1, Math.round(height * ratio));
+
+                        const canvas = document.createElement("canvas");
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext("2d");
+                        ctx.drawImage(img, 0, 0, width, height);
+                        resolve(canvas.toDataURL("image/jpeg", 0.82));
+                    };
+                    img.onerror = reject;
+                    img.src = String(ev.target?.result || "");
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function updateSplashStatusText() {
+            const splashInfo = document.getElementById("pwaSplashModeText");
+            const splashPreviewImg = document.getElementById("pwaSplashPreview");
+            const splashPlaceholder = document.getElementById("pwaSplashPlaceholder");
+
+            if (uploadedSplashDataUrl && !splashSkipped) {
+                splashPreviewImg.src = uploadedSplashDataUrl;
+                splashPreviewImg.classList.remove("hide");
+                splashPlaceholder?.classList.add("hide");
+                if (splashInfo) splashInfo.textContent = "Custom Splash Image selected.";
+            } else if (uploadedLogoDataUrl) {
+                splashPreviewImg.src = uploadedLogoDataUrl;
+                splashPreviewImg.classList.remove("hide");
+                splashPlaceholder?.classList.add("hide");
+                if (splashInfo) splashInfo.textContent = "Skipped — App Logo will be used as Splash Image.";
+            } else {
+                splashPreviewImg.classList.add("hide");
+                splashPlaceholder?.classList.remove("hide");
+                if (splashInfo) splashInfo.textContent = "Skipped — will fallback to App Logo once uploaded.";
+            }
+        }
+
+        async function loadExistingAppBuilderConfig(slug) {
+            const cleanSlug = normalizeSalonId(slug);
+            if (!cleanSlug) return;
+
+            const nameInput = document.getElementById("pwaAppNameInput");
+            const logoPreviewImg = document.getElementById("pwaLogoPreview");
+            const logoPlaceholder = document.getElementById("pwaLogoPlaceholder");
+
+            try {
+                const snap = await getDoc(getSalonDocRef(cleanSlug));
+                if (!snap.exists()) return;
+                const data = snap.data() || {};
+                const pwa = data.pwaConfig || {};
+
+                nameInput.value = pwa.appName || data.salonName || "";
+
+                if (pwa.logoUrl) {
+                    uploadedLogoDataUrl = pwa.logoUrl;
+                    logoPreviewImg.src = pwa.logoUrl;
+                    logoPreviewImg.classList.remove("hide");
+                    logoPlaceholder?.classList.add("hide");
+                }
+
+                splashSkipped = Boolean(pwa.splashSkipped) || (!pwa.splashUrl && Boolean(pwa.logoUrl));
+                uploadedSplashDataUrl = splashSkipped ? "" : (pwa.splashUrl || "");
+                updateSplashStatusText();
+            } catch (err) {
+                console.warn("Failed to load PWA config:", err);
+            }
+        }
+
+        window.toggleAppBuilderPanel = function() {
+            const panel = document.getElementById("mobileAppBuilderPanel");
+            panel.classList.toggle("hide");
+        };
+
+        window.skipSplashUpload = function() {
+            splashSkipped = true;
+            uploadedSplashDataUrl = "";
+            const splashInput = document.getElementById("pwaSplashFileInput");
+            if (splashInput) splashInput.value = "";
+            updateSplashStatusText();
+        };
+
+        document.addEventListener("DOMContentLoaded", () => {
+            const logoFileInput = document.getElementById("pwaLogoFileInput");
+            const logoPreviewImg = document.getElementById("pwaLogoPreview");
+            const logoPlaceholder = document.getElementById("pwaLogoPlaceholder");
+
+            const splashFileInput = document.getElementById("pwaSplashFileInput");
+            const saveBtn = document.getElementById("savePwaConfigBtn");
+            const statusEl = document.getElementById("pwaSaveStatus");
+
+            logoFileInput?.addEventListener("change", async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                    uploadedLogoDataUrl = await compressImageFile(file, 512, 512);
+                    logoPreviewImg.src = uploadedLogoDataUrl;
+                    logoPreviewImg.classList.remove("hide");
+                    logoPlaceholder?.classList.add("hide");
+                    updateSplashStatusText();
+                } catch (err) {
+                    statusEl.textContent = "Logo load karne mein error aaya: " + (err.message || "Try again");
+                    statusEl.className = "text-xs font-semibold text-rose-600 mt-2";
+                    statusEl.classList.remove("hide");
+                }
+            });
+
+            splashFileInput?.addEventListener("change", async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                    uploadedSplashDataUrl = await compressImageFile(file, 1080, 1920);
+                    splashSkipped = false;
+                    updateSplashStatusText();
+                } catch (err) {
+                    statusEl.textContent = "Splash image load karne mein error aaya: " + (err.message || "Try again");
+                    statusEl.className = "text-xs font-semibold text-rose-600 mt-2";
+                    statusEl.classList.remove("hide");
+                }
+            });
+
+            saveBtn?.addEventListener("click", async () => {
+                const appName = document.getElementById("pwaAppNameInput").value.trim();
+                const finalSplashUrl = (!splashSkipped && uploadedSplashDataUrl)
+                    ? uploadedSplashDataUrl
+                    : uploadedLogoDataUrl;
+
+                if (!activeSalonSlug) {
+                    statusEl.textContent = "Active salon ID nahi mila. Kripya page refresh karein.";
+                    statusEl.className = "text-xs font-semibold text-rose-600 mt-2";
+                    statusEl.classList.remove("hide");
+                    return;
+                }
+
+                if (!appName) {
+                    statusEl.textContent = "Kripya App Name likhein.";
+                    statusEl.className = "text-xs font-semibold text-rose-600 mt-2";
+                    statusEl.classList.remove("hide");
+                    return;
+                }
+
+                saveBtn.disabled = true;
+                saveBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1.5"></i> Saving...`;
+
+                try {
+                    await setDoc(getSalonDocRef(activeSalonSlug), {
+                        pwaConfig: {
+                            appName,
+                            logoUrl: uploadedLogoDataUrl || "",
+                            splashUrl: finalSplashUrl || "",
+                            splashSkipped: splashSkipped || !uploadedSplashDataUrl,
+                            updatedAtMs: Date.now()
+                        },
+                        updatedAt: serverTimestamp()
+                    }, { merge: true });
+
+                    statusEl.textContent = "Mobile App settings save ho gayi! App Name, Logo aur Splash image user app par active hain.";
+                    statusEl.className = "text-xs font-semibold text-emerald-600 mt-2";
+                    statusEl.classList.remove("hide");
+                } catch (err) {
+                    statusEl.textContent = "Save karne mein error aaya: " + (err.message || "Try again");
+                    statusEl.className = "text-xs font-semibold text-rose-600 mt-2";
+                    statusEl.classList.remove("hide");
+                } finally {
+                    saveBtn.disabled = false;
+                    saveBtn.innerHTML = `<i class="fa-solid fa-floppy-disk mr-1.5"></i> Save App Settings`;
+                }
+            });
+        });
+
         onAuthStateChanged(auth, async (user) => {
             if (!user || !user.uid) {
                 window.location.replace("index.html");
@@ -37,6 +226,7 @@
             const resolvedSlug = normalizeSalonId(access?.salonId || candidate || sessionStorage.getItem("activeSalonId") || "");
 
             if (resolvedSlug) {
+                activeSalonSlug = resolvedSlug;
                 sessionStorage.setItem("activeSalonId", resolvedSlug);
                 const url = new URL(window.location.href);
                 if (url.searchParams.get("salon") !== resolvedSlug) {
@@ -44,6 +234,7 @@
                     window.history.replaceState({}, document.title, url.toString());
                 }
                 syncAdminMenuLinks(resolvedSlug);
+                await loadExistingAppBuilderConfig(resolvedSlug);
             }
         });
     </script>
@@ -68,6 +259,82 @@
         </header>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+            <!-- Mobile App Builder Card (Manage Services se Upar) -->
+            <button type="button" onclick="toggleAppBuilderPanel()" class="w-full text-left bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-indigo-300 hover:shadow-md transition flex items-center justify-between group md:col-span-2 cursor-pointer">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 bg-cyan-50 text-cyan-600 rounded-2xl flex items-center justify-center text-lg font-bold group-hover:bg-cyan-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-mobile-screen-button"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-gray-900">Mobile App Builder</h3>
+                        <p class="text-xs text-gray-400 mt-0.5">Set App Name, App Logo/Icon & Splash Screen Image</p>
+                    </div>
+                </div>
+                <i class="fa-solid fa-chevron-down text-gray-300 group-hover:text-cyan-600 transition"></i>
+            </button>
+
+            <!-- Expandable Mobile App Builder Form -->
+            <div id="mobileAppBuilderPanel" class="hide bg-white p-6 rounded-3xl border border-cyan-100 shadow-sm space-y-5 md:col-span-2">
+                <div class="text-xs">
+                    <label class="block font-bold text-gray-700 mb-1">App Name *</label>
+                    <input id="pwaAppNameInput" type="text" placeholder="e.g. Royal Looks Booking App"
+                        class="w-full px-3.5 py-2.5 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500">
+                </div>
+
+                <!-- App Logo / Icon Upload -->
+                <div class="space-y-2">
+                    <div class="flex flex-wrap items-center justify-between gap-1">
+                        <label class="block font-bold text-gray-700 text-xs">App Logo / Icon Image Upload</label>
+                        <span class="text-[11px] font-semibold text-indigo-600">Recommended Size: 512 × 512 px (1:1 Square, PNG/JPG)</span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div class="w-16 h-16 rounded-2xl bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
+                            <i id="pwaLogoPlaceholder" class="fa-solid fa-image text-gray-400 text-xl"></i>
+                            <img id="pwaLogoPreview" src="" alt="App Logo" class="hide w-full h-full object-cover">
+                        </div>
+                        <label class="px-4 py-2.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold cursor-pointer transition">
+                            <i class="fa-solid fa-upload mr-1.5"></i> Upload Logo / Icon
+                            <input id="pwaLogoFileInput" type="file" accept="image/*" class="hidden">
+                        </label>
+                    </div>
+                </div>
+
+                <!-- App Splash Image Upload (With Skip Option) -->
+                <div class="space-y-2 pt-2 border-t border-gray-100">
+                    <div class="flex flex-wrap items-center justify-between gap-1">
+                        <label class="block font-bold text-gray-700 text-xs">App Splash Image Upload (Optional)</label>
+                        <span class="text-[11px] font-semibold text-indigo-600">Recommended Size: 1080 × 1920 px (Portrait, JPG/PNG)</span>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-3">
+                        <div class="w-16 h-24 rounded-2xl bg-gray-100 border border-gray-200 flex items-center justify-center overflow-hidden shrink-0">
+                            <i id="pwaSplashPlaceholder" class="fa-solid fa-mobile-screen text-gray-400 text-xl"></i>
+                            <img id="pwaSplashPreview" src="" alt="Splash Preview" class="hide w-full h-full object-cover">
+                        </div>
+                        <div class="space-y-2">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <label class="px-4 py-2.5 rounded-xl bg-cyan-50 hover:bg-cyan-100 text-cyan-800 text-xs font-bold cursor-pointer transition">
+                                    <i class="fa-solid fa-image mr-1.5"></i> Upload Splash Image
+                                    <input id="pwaSplashFileInput" type="file" accept="image/*" class="hidden">
+                                </label>
+                                <button type="button" onclick="skipSplashUpload()"
+                                    class="px-3.5 py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold transition cursor-pointer">
+                                    Skip (Use Logo)
+                                </button>
+                            </div>
+                            <p id="pwaSplashModeText" class="text-[11px] text-gray-500">Agar aap skip karenge toh jo App Logo hai wahi Splash Image me lag jayega.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pt-1">
+                    <button id="savePwaConfigBtn" type="button"
+                        class="w-full md:w-auto px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition shadow cursor-pointer">
+                        <i class="fa-solid fa-floppy-disk mr-1.5"></i> Save App Settings
+                    </button>
+                    <p id="pwaSaveStatus" class="hide text-xs font-semibold mt-2"></p>
+                </div>
+            </div>
 
             <a data-admin-nav="services.html" href="services.html" class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-indigo-300 hover:shadow-md transition flex items-center justify-between group">
                 <div class="flex items-center gap-4">
