@@ -235,7 +235,7 @@
 
             document.getElementById("adminWelcomeName").innerText = salonId;
             document.getElementById("activeSalonIdBadge").innerText = `Salon Slug: ${salonId}`;
-            document.getElementById("customerShareLink").value = buildSalonUrl("../index.html", salonId);
+            document.getElementById("customerShareLink").value = buildSalonUrl("../User/index.html", salonId);
 
             const settingsLink = document.getElementById("goToSettingsBtn");
             if (settingsLink) settingsLink.href = `settings.html?salon=${encodeURIComponent(salonId)}`;
