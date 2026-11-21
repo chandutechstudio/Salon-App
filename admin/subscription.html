@@ -9,8 +9,8 @@
 
     <script type="module">
         import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { auth, getSubscriptionDocRef, verifyAdminSalonAccess } from "./tenant.js";
+        import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { auth, db, getSubscriptionDocRef, verifyAdminSalonAccess } from "./tenant.js";
 
         const ZAPUPI_KEY = "Zapfba972d2f8d8d61bf40b15535d3e1424";
 
@@ -18,17 +18,32 @@
         let currentPlanText = "7 Days Free Trial";
         let currentPlanDays = 7;
         let salonId = "";
-        let unsubscribeSub = null;
+        let adminEmailKey = "";
+        let unsubscribeSalonSub = null;
+        let unsubscribeEmailSub = null;
+        let isTrialAlreadyClaimed = false;
+
+        function normalizeEmail(email) {
+            return String(email || "").trim().toLowerCase();
+        }
+
+        function getEmailSubscriptionDocRef(email) {
+            const key = normalizeEmail(email);
+            if (!key) return null;
+            return doc(db, "subscriptions", key);
+        }
 
         function applyTrialUiState(claimed) {
+            isTrialAlreadyClaimed = Boolean(claimed);
             const trialCard = document.getElementById("freeTrialCard");
             const trialInput = document.getElementById("trialRadio");
             const trialText = document.getElementById("trialSubText");
 
-            if (claimed) {
+            if (isTrialAlreadyClaimed) {
                 trialCard.classList.remove("cursor-pointer", "border-green-500", "bg-green-50/50");
                 trialCard.classList.add("opacity-50", "bg-gray-100", "border-gray-300", "cursor-not-allowed");
                 trialInput.disabled = true;
+                trialInput.checked = false;
                 trialText.innerText = "Already Claimed";
                 trialText.className = "text-[10px] text-red-500 font-bold mt-2";
 
@@ -46,14 +61,64 @@
             }
         }
 
-        function listenSubscriptionPage() {
-            if (unsubscribeSub) unsubscribeSub();
-            unsubscribeSub = onSnapshot(getSubscriptionDocRef(salonId), (docSnap) => {
-                const claimed = docSnap.exists() && docSnap.data()?.trialClaimed === true;
-                applyTrialUiState(claimed);
+        async function checkInitialEmailClaim(emailKey, currentSalon) {
+            if (!emailKey) return false;
+            try {
+                const emailRef = getEmailSubscriptionDocRef(emailKey);
+                if (emailRef) {
+                    const emailSnap = await getDoc(emailRef);
+                    if (emailSnap.exists() && emailSnap.data()?.trialClaimed === true) {
+                        return true;
+                    }
+                }
+            } catch (_) {}
+
+            if (currentSalon) {
+                try {
+                    const salonSnap = await getDoc(getSubscriptionDocRef(currentSalon));
+                    if (salonSnap.exists() && salonSnap.data()?.trialClaimed === true) {
+                        return true;
+                    }
+                } catch (_) {}
+            }
+            return false;
+        }
+
+        async function listenSubscriptionPage() {
+            if (unsubscribeSalonSub) {
+                unsubscribeSalonSub();
+                unsubscribeSalonSub = null;
+            }
+            if (unsubscribeEmailSub) {
+                unsubscribeEmailSub();
+                unsubscribeEmailSub = null;
+            }
+
+            let salonClaimed = false;
+            let emailClaimed = await checkInitialEmailClaim(adminEmailKey, salonId);
+
+            const refreshClaimState = () => {
+                applyTrialUiState(salonClaimed || emailClaimed);
+            };
+
+            refreshClaimState();
+
+            unsubscribeSalonSub = onSnapshot(getSubscriptionDocRef(salonId), (docSnap) => {
+                salonClaimed = docSnap.exists() && docSnap.data()?.trialClaimed === true;
+                refreshClaimState();
             }, (error) => {
-                console.error("Error checking trial status:", error);
+                console.error("Error checking salon trial status:", error);
             });
+
+            const emailRef = getEmailSubscriptionDocRef(adminEmailKey);
+            if (emailRef) {
+                unsubscribeEmailSub = onSnapshot(emailRef, (docSnap) => {
+                    emailClaimed = docSnap.exists() && docSnap.data()?.trialClaimed === true;
+                    refreshClaimState();
+                }, (error) => {
+                    console.error("Error checking email trial status:", error);
+                });
+            }
         }
 
         onAuthStateChanged(auth, async (user) => {
@@ -62,6 +127,7 @@
                 return;
             }
 
+            adminEmailKey = normalizeEmail(user.email || sessionStorage.getItem("adminEmail"));
             const params = new URLSearchParams(window.location.search);
             const candidate = params.get("salon") || sessionStorage.getItem("activeSalonId") || "";
             const access = await verifyAdminSalonAccess(user, candidate);
@@ -74,6 +140,7 @@
 
             salonId = access.salonId;
             sessionStorage.setItem("activeSalonId", salonId);
+            if (adminEmailKey) sessionStorage.setItem("adminEmail", adminEmailKey);
 
             if (access.redirectedFromUnauthorized || params.get("salon") !== salonId) {
                 const cleanUrl = new URL(window.location.href);
@@ -82,10 +149,14 @@
             }
 
             document.getElementById("activeSlugHeader").innerText = `Salon: ${salonId}`;
-            listenSubscriptionPage();
+            await listenSubscriptionPage();
         });
 
         window.selectPlan = function(amount, planName, days, element) {
+            if (amount === 0 && (isTrialAlreadyClaimed || element.classList.contains("cursor-not-allowed"))) {
+                return;
+            }
+
             currentAmount = amount;
             currentPlanText = planName;
             currentPlanDays = days;
@@ -102,18 +173,11 @@
             const proceedBtn = document.getElementById("proceedBtn");
 
             if (amount === 0) {
-                if (element.classList.contains("cursor-not-allowed")) {
-                    proceedBtn.innerText = "Free Trial Already Used";
-                    proceedBtn.className = "w-full bg-gray-400 text-white font-bold py-3.5 rounded-xl text-xs cursor-not-allowed flex items-center justify-center gap-2";
-                    proceedBtn.disabled = true;
-                    return;
-                } else {
-                    element.classList.remove("border-gray-200", "bg-white");
-                    element.classList.add("border-green-500", "bg-green-50/50");
-                    proceedBtn.innerHTML = `<i class="fa-solid fa-check"></i> Activate 7 Days Free Trial`;
-                    proceedBtn.className = "w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl text-xs transition shadow-lg shadow-green-100 flex items-center justify-center gap-2 cursor-pointer";
-                    proceedBtn.disabled = false;
-                }
+                element.classList.remove("border-gray-200", "bg-white");
+                element.classList.add("border-green-500", "bg-green-50/50");
+                proceedBtn.innerHTML = `<i class="fa-solid fa-check"></i> Activate 7 Days Free Trial`;
+                proceedBtn.className = "w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3.5 rounded-xl text-xs transition shadow-lg shadow-green-100 flex items-center justify-center gap-2 cursor-pointer";
+                proceedBtn.disabled = false;
             } else {
                 element.classList.remove("border-gray-200", "bg-white");
                 element.classList.add("border-indigo-600", "bg-indigo-50/50");
@@ -140,35 +204,44 @@
             }
 
             if (currentAmount === 0) {
+                const alreadyUsed = isTrialAlreadyClaimed || await checkInitialEmailClaim(adminEmailKey, salonId);
+                if (alreadyUsed) {
+                    applyTrialUiState(true);
+                    window.showCustomPopup("Already Claimed", "Is Gmail / email se Free Trial pehle hi claim kiya ja chuka hai!", "error");
+                    return;
+                }
+
                 const origHtml = btn.innerHTML;
                 btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Activating Trial...`;
                 btn.disabled = true;
 
                 try {
-                    const docRef = getSubscriptionDocRef(salonId);
-                    const docSnap = await getDoc(docRef);
-
-                    if (docSnap.exists() && docSnap.data()?.trialClaimed === true) {
-                        window.showCustomPopup("Error", "Aap pehle hi Free Trial use kar chuke hain!", "error");
-                        btn.innerHTML = origHtml;
-                        btn.disabled = false;
-                        return;
-                    }
-
                     const expiryDate = new Date();
                     expiryDate.setDate(expiryDate.getDate() + 7);
 
-                    await setDoc(docRef, {
+                    const claimPayload = {
                         salonId,
                         ownerUid: auth.currentUser.uid,
-                        ownerEmail: (auth.currentUser.email || "").trim().toLowerCase(),
+                        ownerEmail: adminEmailKey,
                         plan: "7 Days Free Trial",
                         status: "Active",
                         validity: expiryDate.toISOString(),
                         trialClaimed: true,
+                        trialClaimedByEmail: adminEmailKey,
                         updatedAt: serverTimestamp()
-                    }, { merge: true });
+                    };
 
+                    await setDoc(getSubscriptionDocRef(salonId), claimPayload, { merge: true });
+
+                    const emailRef = getEmailSubscriptionDocRef(adminEmailKey);
+                    if (emailRef) {
+                        await setDoc(emailRef, {
+                            ...claimPayload,
+                            trialSalonId: salonId
+                        }, { merge: true });
+                    }
+
+                    applyTrialUiState(true);
                     window.showCustomPopup("Trial Activated!", "7 Days Free Trial has been activated successfully.", "success");
                 } catch (error) {
                     console.error("Error:", error);
