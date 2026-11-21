@@ -8,21 +8,8 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
     <script type="module">
-        import { getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { salonNameToSlug, normalizeSalonId, getSalonDocRef, requireAdminAuth } from "./tenant.js";
-
-        let currentAdminUser = null;
-        let currentSalonSlug = "";
-        let unsubscribeSalon = null;
-
-        function buildCustomerBookingLink(slug) {
-            const cleanSlug = normalizeSalonId(slug);
-            const rootUrl = new URL("../User/index.html", window.location.href);
-            if (cleanSlug) {
-                rootUrl.searchParams.set("salon", cleanSlug);
-            }
-            return rootUrl.toString();
-        }
+        import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { auth, normalizeSalonId, verifyAdminSalonAccess } from "./tenant.js";
 
         function syncAdminMenuLinks(slug) {
             const cleanSlug = normalizeSalonId(slug);
@@ -38,229 +25,30 @@
             });
         }
 
-        function refreshSlugPreview() {
-            const nameInput = document.getElementById("salonNameInput");
-            const slugPreview = document.getElementById("salonSlugPreview");
-            const linkInput = document.getElementById("customerLinkInput");
-
-            const typedName = (nameInput?.value || "").trim();
-            const generatedSlug = salonNameToSlug(typedName) || currentSalonSlug || "your-salon-name";
-
-            if (slugPreview) slugPreview.innerText = generatedSlug;
-            if (linkInput) linkInput.value = buildCustomerBookingLink(generatedSlug);
-            syncAdminMenuLinks(generatedSlug);
-        }
-
-        window.onSalonNameChange = function() {
-            refreshSlugPreview();
-        };
-
-        window.copyCustomerLink = async function() {
-            const linkInput = document.getElementById("customerLinkInput");
-            const btn = document.getElementById("copyLinkBtn");
-            if (!linkInput?.value) return;
-
-            try {
-                await navigator.clipboard.writeText(linkInput.value);
-            } catch (_) {
-                linkInput.select();
-                document.execCommand("copy");
-            }
-
-            if (btn) {
-                const oldHtml = btn.innerHTML;
-                btn.innerHTML = `<i class="fa-solid fa-check mr-1"></i> Copied`;
-                setTimeout(() => {
-                    btn.innerHTML = oldHtml;
-                }, 1800);
-            }
-        };
-
-        function showStatus(msg, isError = false) {
-            const box = document.getElementById("settingsStatusBox");
-            if (!box) return;
-            box.innerText = msg;
-            box.className = isError
-                ? "text-xs font-semibold p-3 rounded-xl bg-red-50 text-red-600 border border-red-200"
-                : "text-xs font-semibold p-3 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200";
-            box.classList.remove("hidden");
-        }
-
-        function listenSalonSettings(slug) {
-            if (!slug) return;
-            currentSalonSlug = slug;
-            refreshSlugPreview();
-
-            if (unsubscribeSalon) {
-                unsubscribeSalon();
-                unsubscribeSalon = null;
-            }
-
-            unsubscribeSalon = onSnapshot(getSalonDocRef(slug), (snap) => {
-                if (snap.exists()) {
-                    const data = snap.data() || {};
-                    if (data.salonName) document.getElementById("salonNameInput").value = data.salonName;
-                    if (data.phone) document.getElementById("salonPhoneInput").value = data.phone;
-                    if (data.city) document.getElementById("salonCityInput").value = data.city;
-                    if (data.address) document.getElementById("salonAddressInput").value = data.address;
-                    if (data.openingHours) document.getElementById("salonHoursInput").value = data.openingHours;
-                }
-                refreshSlugPreview();
-            }, (err) => {
-                console.error("Load salon settings error:", err);
-                showStatus("Could not load salon details: " + err.message, true);
-            });
-        }
-
-        window.saveSalonSettings = async function(event) {
-            event.preventDefault();
-            if (!currentAdminUser) {
+        onAuthStateChanged(auth, async (user) => {
+            if (!user || !user.uid) {
                 window.location.replace("index.html");
                 return;
             }
 
-            const salonName = (document.getElementById("salonNameInput").value || "").trim();
-            const newSlug = salonNameToSlug(salonName);
-            const oldSlug = normalizeSalonId(currentSalonSlug || sessionStorage.getItem("activeSalonId") || "");
-            const phone = (document.getElementById("salonPhoneInput").value || "").trim();
-            const city = (document.getElementById("salonCityInput").value || "").trim();
-            const address = (document.getElementById("salonAddressInput").value || "").trim();
-            const openingHours = (document.getElementById("salonHoursInput").value || "").trim();
+            const params = new URLSearchParams(window.location.search);
+            const candidate = params.get("salon") || sessionStorage.getItem("activeSalonId") || "";
+            const access = await verifyAdminSalonAccess(user, candidate);
+            const resolvedSlug = normalizeSalonId(access?.salonId || candidate || sessionStorage.getItem("activeSalonId") || "");
 
-            if (!salonName || !newSlug) {
-                showStatus("Please enter a valid Salon Name (letters or numbers).", true);
-                return;
-            }
-
-            const saveBtn = document.getElementById("saveSettingsBtn");
-            saveBtn.disabled = true;
-            saveBtn.innerText = "Saving...";
-
-            try {
-                let previousSlugs = [];
-                if (oldSlug && oldSlug !== newSlug) {
-                    try {
-                        const oldSnap = await getDoc(getSalonDocRef(oldSlug));
-                        const oldData = oldSnap.exists() ? (oldSnap.data() || {}) : {};
-                        const existingPrev = Array.isArray(oldData.previousSlugs) ? oldData.previousSlugs : [];
-                        previousSlugs = Array.from(new Set([...existingPrev, oldSlug]));
-
-                        // Purane slug ko naye slug par redirect/link rakhein taaki existing users & links na tootein
-                        await setDoc(
-                            getSalonDocRef(oldSlug),
-                            {
-                                salonId: oldSlug,
-                                salonName,
-                                redirectToSlug: newSlug,
-                                previousSlugs,
-                                ownerUid: currentAdminUser.uid,
-                                ownerEmail: (currentAdminUser.email || "").toLowerCase(),
-                                updatedAt: serverTimestamp()
-                            },
-                            { merge: true }
-                        );
-                    } catch (_) {}
-                }
-
-                // Naye salon doc mein purane data aur previousSlugs ko preserve rakhein
-                let preservedFields = {};
-                try {
-                    const existingNewSnap = await getDoc(getSalonDocRef(newSlug));
-                    if (existingNewSnap.exists()) {
-                        preservedFields = existingNewSnap.data() || {};
-                    } else if (oldSlug && oldSlug !== newSlug) {
-                        const oldSnap = await getDoc(getSalonDocRef(oldSlug));
-                        if (oldSnap.exists()) {
-                            const od = oldSnap.data() || {};
-                            preservedFields = {
-                                upiId: od.upiId || "",
-                                qrCodeImage: od.qrCodeImage || "",
-                                qrCodeBase64: od.qrCodeBase64 || "",
-                                qrUrl: od.qrUrl || "",
-                                zapUnlocked: od.zapUnlocked === true,
-                                zapGatewayStatus: od.zapGatewayStatus || "disabled",
-                                zapApiKey: od.zapApiKey || ""
-                            };
-                        }
-                    }
-                } catch (_) {}
-
-                const mergedPrevSlugs = Array.from(
-                    new Set([
-                        ...(Array.isArray(preservedFields.previousSlugs) ? preservedFields.previousSlugs : []),
-                        ...previousSlugs
-                    ])
-                );
-
-                await setDoc(
-                    getSalonDocRef(newSlug),
-                    {
-                        ...preservedFields,
-                        salonId: newSlug,
-                        salonName,
-                        phone,
-                        city,
-                        address,
-                        openingHours,
-                        previousSlugs: mergedPrevSlugs,
-                        redirectToSlug: "",
-                        ownerUid: currentAdminUser.uid,
-                        ownerEmail: (currentAdminUser.email || "").toLowerCase(),
-                        updatedAt: serverTimestamp()
-                    },
-                    { merge: true }
-                );
-
-                if (currentAdminUser.email) {
-                    await setDoc(
-                        getSalonDocRef(currentAdminUser.email.toLowerCase()),
-                        {
-                            linkedSalonSlug: newSlug,
-                            previousSlugs: mergedPrevSlugs,
-                            salonName,
-                            ownerUid: currentAdminUser.uid,
-                            ownerEmail: currentAdminUser.email.toLowerCase(),
-                            updatedAt: serverTimestamp()
-                        },
-                        { merge: true }
-                    ).catch(() => {});
-                }
-
-                currentSalonSlug = newSlug;
-                sessionStorage.setItem("activeSalonId", newSlug);
-                sessionStorage.setItem("salonName", salonName);
-
+            if (resolvedSlug) {
+                sessionStorage.setItem("activeSalonId", resolvedSlug);
                 const url = new URL(window.location.href);
-                url.searchParams.set("salon", newSlug);
-                window.history.replaceState({}, document.title, url.toString());
-
-                listenSalonSettings(newSlug);
-                refreshSlugPreview();
-                showStatus("Salon Name & Customer Link saved! Active slug: " + newSlug + (oldSlug && oldSlug !== newSlug ? " (Old slug '" + oldSlug + "' redirected safely)" : ""));
-            } catch (err) {
-                console.error("Save salon settings error:", err);
-                showStatus("Failed to save settings: " + err.message, true);
-            } finally {
-                saveBtn.disabled = false;
-                saveBtn.innerText = "Save Salon Settings";
+                if (url.searchParams.get("salon") !== resolvedSlug) {
+                    url.searchParams.set("salon", resolvedSlug);
+                    window.history.replaceState({}, document.title, url.toString());
+                }
+                syncAdminMenuLinks(resolvedSlug);
             }
-        };
-
-        requireAdminAuth(async (user, resolvedSlug) => {
-            currentAdminUser = user;
-            document.body.classList.remove("hidden");
-
-            const url = new URL(window.location.href);
-            if (url.searchParams.get("salon") !== resolvedSlug) {
-                url.searchParams.set("salon", resolvedSlug);
-                window.history.replaceState({}, document.title, url.toString());
-            }
-
-            listenSalonSettings(resolvedSlug);
         });
     </script>
 </head>
-<body class="bg-gray-50 font-sans text-gray-800 p-4 md:p-8 hidden">
+<body class="bg-gray-50 font-sans text-gray-800 p-4 md:p-8">
 
     <div class="max-w-4xl mx-auto space-y-6">
 
@@ -278,34 +66,6 @@
                 Dashboard
             </a>
         </header>
-
-        <section class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm space-y-3">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-                <h2 class="text-sm font-bold text-gray-900">Customer Booking Link</h2>
-                <span class="text-[11px] font-bold px-3 py-1 rounded-full bg-indigo-50 text-indigo-600">
-                    Salon Slug: <span id="salonSlugPreview">your-salon-name</span>
-                </span>
-            </div>
-            <p class="text-xs text-gray-400">
-                Share this link with customers. They will login or register first and book under your salon name.
-            </p>
-            <div class="flex gap-2">
-                <input
-                    id="customerLinkInput"
-                    type="text"
-                    readonly
-                    class="flex-1 px-3.5 py-2.5 text-xs bg-gray-50 border border-gray-200 rounded-xl text-gray-700 font-medium"
-                >
-                <button
-                    id="copyLinkBtn"
-                    type="button"
-                    onclick="copyCustomerLink()"
-                    class="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm transition shrink-0"
-                >
-                    <i class="fa-regular fa-copy mr-1"></i> Copy
-                </button>
-            </div>
-        </section>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 
@@ -387,78 +147,20 @@
                 <i class="fa-solid fa-chevron-right text-gray-300 group-hover:text-amber-600 transition"></i>
             </a>
 
+            <a data-admin-nav="manage-password.html" href="manage-password.html" class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm hover:border-rose-300 hover:shadow-md transition flex items-center justify-between group md:col-span-2">
+                <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 bg-rose-50 text-rose-600 rounded-2xl flex items-center justify-center text-lg font-bold group-hover:bg-rose-600 group-hover:text-white transition">
+                        <i class="fa-solid fa-key"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-sm text-gray-900">Manage Password</h3>
+                        <p class="text-xs text-gray-400 mt-0.5">Verify old password & update to a new admin password</p>
+                    </div>
+                </div>
+                <i class="fa-solid fa-chevron-right text-gray-300 group-hover:text-rose-600 transition"></i>
+            </a>
+
         </div>
-
-        <form onsubmit="saveSalonSettings(event)" class="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm space-y-4">
-            <div>
-                <h2 class="text-base font-bold text-gray-900">Salon Name & Profile</h2>
-                <p class="text-xs text-gray-400 mt-0.5">Your Salon Name creates a clean URL slug so customers don't see email IDs.</p>
-            </div>
-
-            <div id="settingsStatusBox" class="hidden"></div>
-
-            <div>
-                <label class="block text-xs font-bold text-gray-700 mb-1">Salon Name *</label>
-                <input
-                    id="salonNameInput"
-                    type="text"
-                    required
-                    oninput="onSalonNameChange()"
-                    placeholder="e.g. Royal Look Salon"
-                    class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
-                >
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-xs font-bold text-gray-700 mb-1">Contact Phone</label>
-                    <input
-                        id="salonPhoneInput"
-                        type="tel"
-                        placeholder="10-digit mobile number"
-                        class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
-                    >
-                </div>
-                <div>
-                    <label class="block text-xs font-bold text-gray-700 mb-1">City / Region</label>
-                    <input
-                        id="salonCityInput"
-                        type="text"
-                        placeholder="e.g. Raigarh, Chhattisgarh"
-                        class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
-                    >
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <label class="block text-xs font-bold text-gray-700 mb-1">Address</label>
-                    <input
-                        id="salonAddressInput"
-                        type="text"
-                        placeholder="Street, area, landmark"
-                        class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
-                    >
-                </div>
-                <div>
-                    <label class="block text-xs font-bold text-gray-700 mb-1">Opening Hours</label>
-                    <input
-                        id="salonHoursInput"
-                        type="text"
-                        placeholder="e.g. Mon - Sun, 9:00 AM - 9:00 PM"
-                        class="w-full px-3.5 py-2.5 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:bg-white focus:outline-none focus:border-indigo-500"
-                    >
-                </div>
-            </div>
-
-            <button
-                id="saveSettingsBtn"
-                type="submit"
-                class="w-full md:w-auto px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md transition"
-            >
-                Save Salon Settings
-            </button>
-        </form>
 
     </div>
 
