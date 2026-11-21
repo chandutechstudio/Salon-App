@@ -5,7 +5,7 @@ import { getAuth } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth
 
 const firebaseConfig = {
   apiKey: "AIzaSyBR7QQNVmKmlAem6FRfqbMYVuK0tdwhb6I",
-  authDomain: "creator-chandu.firebaseapp.com",
+  authDomain:  "creator-chandu.firebaseapp.com",
   projectId: "creator-chandu",
   storageBucket: "creator-chandu.firebasestorage.app",
   messagingSenderId: "536504537561",
