@@ -18,37 +18,35 @@
         import { setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
         import {
             auth,
+            DEFAULT_SALON_SLUG,
             resolveActiveSalonId,
             resolveCanonicalSalonId,
             buildSalonUrl,
             getCustomerDocRef
         } from "./tenant.js";
 
-        let activeSalonId = resolveActiveSalonId({ persist: true });
+        let activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG });
         let isRedirecting = false;
 
         async function getResolvedSalonSlug() {
-            const immediateSlug = resolveActiveSalonId({ persist: true });
-            if (immediateSlug) {
-                activeSalonId = immediateSlug;
-            }
-            if (!activeSalonId) return "";
+            const immediateSlug = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
+            activeSalonId = immediateSlug;
 
             try {
                 const canonical = await Promise.race([
-                    resolveCanonicalSalonId(activeSalonId, { persist: true }),
-                    new Promise((resolve) => setTimeout(() => resolve(activeSalonId), 2000))
+                    resolveCanonicalSalonId(immediateSlug, { persist: true }),
+                    new Promise((resolve) => setTimeout(() => resolve(immediateSlug), 2000))
                 ]);
                 if (canonical) {
                     activeSalonId = canonical;
                 }
             } catch (_) {}
 
-            return activeSalonId;
+            return activeSalonId || DEFAULT_SALON_SLUG;
         }
 
         function getPostAuthRedirectUrl(salonSlug) {
-            const targetSlug = salonSlug || activeSalonId;
+            const targetSlug = salonSlug || activeSalonId || DEFAULT_SALON_SLUG;
             const params = new URLSearchParams(window.location.search);
             const rawNext = (params.get("next") || "").trim();
             const safePages = ["home.html", "booking.html", "payment.html", "category.html", "status.html", "history.html", "profile.html", "success.html"];
@@ -66,9 +64,7 @@
             if (user.email) {
                 sessionStorage.setItem("salonCustomerEmail", user.email.trim().toLowerCase());
             }
-            if (slug) {
-                sessionStorage.setItem("activeSalonId", slug);
-            }
+            sessionStorage.setItem("activeSalonId", slug);
 
             window.location.replace(getPostAuthRedirectUrl(slug));
         }
@@ -110,7 +106,7 @@
         }
 
         async function syncCustomerToSalon(user, name, email, salonSlug) {
-            const salonId = salonSlug || resolveActiveSalonId({ persist: true }) || activeSalonId;
+            const salonId = salonSlug || resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
             if (!salonId || !user) return;
             await setDoc(
                 getCustomerDocRef(salonId, user.uid),
@@ -131,11 +127,6 @@
             const origHtml = submitBtn.innerHTML;
 
             const salonSlug = await getResolvedSalonSlug();
-            if (!salonSlug) {
-                showError("⚠️ Salon link missing! Kripya admin ka diya hua salon booking link open karein.");
-                return;
-            }
-
             const email = document.getElementById("loginEmail").value.trim().toLowerCase();
             const pass = document.getElementById("loginPass").value;
 
@@ -177,11 +168,6 @@
             const origHtml = submitBtn.innerHTML;
 
             const salonSlug = await getResolvedSalonSlug();
-            if (!salonSlug) {
-                showError("⚠️ Salon link missing! Kripya admin ka diya hua salon booking link open karein.");
-                return;
-            }
-
             const name = document.getElementById("regName").value.trim();
             const email = document.getElementById("regEmail").value.trim().toLowerCase();
             const pass = document.getElementById("regPass").value;
