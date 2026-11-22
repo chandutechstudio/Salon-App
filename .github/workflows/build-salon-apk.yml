@@ -193,11 +193,30 @@ jobs:
         working-directory: android-builder
         run: gradle assembleDebug
 
+      - name: Rename APK to Brand Name
+        shell: bash
+        env:
+          APP_NAME: ${{ github.event.client_payload.appName }}
+        run: |
+          python3 - << 'EOF'
+          import os, re, shutil
+
+          raw_name = (os.environ.get("APP_NAME") or "Salon-App").strip()
+          safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", raw_name).strip("-") or "Salon-App"
+
+          src_apk = "android-builder/app/build/outputs/apk/debug/app-debug.apk"
+          dst_apk = f"android-builder/app/build/outputs/apk/debug/{safe_name}.apk"
+
+          shutil.copyfile(src_apk, dst_apk)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_f:
+              env_f.write(f"APK_FILE_PATH={dst_apk}\n")
+          EOF
+
       - name: Upload APK to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-${{ github.event.client_payload.salonId }}-${{ github.event.client_payload.buildId }}
           name: ${{ github.event.client_payload.appName }} (${{ github.event.client_payload.salonId }})
-          files: android-builder/app/build/outputs/apk/debug/app-debug.apk
+          files: ${{ env.APK_FILE_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
