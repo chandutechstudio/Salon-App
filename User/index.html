@@ -145,12 +145,15 @@
             const cardTitleEl = document.getElementById("brandAppTitle");
             if (cardTitleEl) cardTitleEl.innerText = appName;
 
-            const splashTitle = document.getElementById("splashAppTitle");
             const splashImg = document.getElementById("splashImageEl");
-            if (splashTitle) splashTitle.textContent = appName;
-            if (splashUrl && splashImg) {
-                splashImg.src = splashUrl;
+            const splashFallback = document.getElementById("splashFallbackLogo");
+            const activeLogo = splashUrl || logoUrl;
+            if (activeLogo && splashImg) {
+                splashImg.src = activeLogo;
                 splashImg.classList.remove("hide");
+                if (splashFallback) splashFallback.classList.add("hide");
+            } else if (splashFallback) {
+                splashFallback.classList.remove("hide");
             }
 
             const bannerName = document.getElementById("bannerAppName");
@@ -424,11 +427,12 @@
 </head>
 <body class="bg-gradient-to-br from-indigo-600 to-purple-800 min-h-screen flex items-center justify-center p-4 font-sans text-gray-800">
 
-    <!-- Dynamic Splash Screen -->
+    <!-- Logo-Only Splash Screen -->
     <div id="salonSplashScreen" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white transition-opacity duration-300 p-6 text-center">
-        <img id="splashImageEl" src="" alt="Splash Screen" class="hide max-h-64 max-w-xs rounded-3xl object-contain shadow-2xl mb-4">
-        <h2 id="splashAppTitle" class="text-xl font-extrabold tracking-wide">Salon App</h2>
-        <p class="text-xs text-slate-400 mt-1">Loading your salon experience...</p>
+        <img id="splashImageEl" src="" alt="App Logo" class="hide max-h-56 max-w-xs rounded-3xl object-contain shadow-2xl">
+        <div id="splashFallbackLogo" class="bg-indigo-100 text-indigo-600 w-20 h-20 rounded-full flex items-center justify-center text-3xl font-bold shadow-2xl">
+            <i class="fa-solid fa-scissors"></i>
+        </div>
     </div>
 
     <!-- Install App Banner -->
