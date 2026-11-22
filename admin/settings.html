@@ -14,11 +14,26 @@
         import { auth, normalizeSalonId, verifyAdminSalonAccess, getSalonDocRef } from "./tenant.js";
 
         const APK_WORKER_URL = "https://salon-apk-builder.chandutechstudio.workers.dev";
+        const POLL_INTERVAL_MS = 2500;
+        const DEFAULT_ESTIMATED_BUILD_SEC = 55;
 
         let activeSalonSlug = "";
         let uploadedLogoDataUrl = "";
         let uploadedSplashDataUrl = "";
         let splashSkipped = false;
+
+        let apkPollTimer = null;
+        let apkElapsedTimer = null;
+        let currentBuildState = {
+            active: false,
+            startedAtMs: 0,
+            estimatedSec: DEFAULT_ESTIMATED_BUILD_SEC,
+            downloadUrl: "",
+            statusUrl: "",
+            runId: "",
+            buildId: "",
+            hasStatusEndpoint: false
+        };
 
         function getUserAppUrl(slug) {
             const cleanSlug = normalizeSalonId(slug);
@@ -27,19 +42,6 @@
                 userUrl.searchParams.set("salon", cleanSlug);
             }
             return userUrl.toString();
-        }
-
-        function renderUserAppLinkBox(slug) {
-            const box = document.getElementById("pwaGeneratedLinkBox");
-            const linkInput = document.getElementById("pwaUserAppLinkInput");
-            const openBtn = document.getElementById("openUserAppLinkBtn");
-            const cleanSlug = normalizeSalonId(slug);
-
-            if (!box || !linkInput || !openBtn || !cleanSlug) return;
-            const urlStr = getUserAppUrl(cleanSlug);
-            linkInput.value = urlStr;
-            openBtn.href = urlStr;
-            box.classList.remove("hide");
         }
 
         function syncAdminMenuLinks(slug) {
@@ -121,6 +123,222 @@
             };
         }
 
+        function clearBuildTimers() {
+            if (apkPollTimer) {
+                clearInterval(apkPollTimer);
+                apkPollTimer = null;
+            }
+            if (apkElapsedTimer) {
+                clearInterval(apkElapsedTimer);
+                apkElapsedTimer = null;
+            }
+        }
+
+        function formatElapsed(sec) {
+            const mins = Math.floor(sec / 60);
+            const rem = sec % 60;
+            return mins > 0 ? `${mins}m ${rem}s` : `${rem}s`;
+        }
+
+        function setBuildProgressUi({ percent, stepText, detailText, isError = false, isSuccess = false }) {
+            const progressBox = document.getElementById("apkBuildProgressBox");
+            const barEl = document.getElementById("apkProgressBar");
+            const pctEl = document.getElementById("apkProgressPercent");
+            const stepEl = document.getElementById("apkProgressStepText");
+            const detailEl = document.getElementById("apkProgressDetailText");
+
+            if (!progressBox) return;
+            progressBox.classList.remove("hide");
+
+            const safePct = Math.max(0, Math.min(100, Math.round(percent)));
+            if (barEl) {
+                barEl.style.width = `${safePct}%`;
+                barEl.className = isError
+                    ? "h-full bg-rose-500 transition-all duration-300 rounded-full"
+                    : isSuccess
+                        ? "h-full bg-emerald-400 transition-all duration-300 rounded-full"
+                        : "h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-300 rounded-full";
+            }
+            if (pctEl) pctEl.textContent = `${safePct}%`;
+            if (stepEl && stepText) stepEl.textContent = stepText;
+            if (detailEl && detailText) detailEl.textContent = detailText;
+        }
+
+        function revealDownloadOption(downloadUrl, messageText = "GitHub Actions build green tick ke saath complete ho gaya! Download APK ready hai.") {
+            clearBuildTimers();
+            currentBuildState.active = false;
+
+            const buildBtn = document.getElementById("buildSalonApkBtn");
+            const downloadBox = document.getElementById("apkDownloadBox");
+            const downloadBtn = document.getElementById("downloadApkLinkBtn");
+            const statusEl = document.getElementById("pwaSaveStatus");
+
+            if (buildBtn) {
+                buildBtn.disabled = false;
+                buildBtn.innerHTML = `<i class="fa-brands fa-android mr-1.5"></i> Build APK`;
+            }
+
+            setBuildProgressUi({
+                percent: 100,
+                stepText: "GitHub Action Completed (Green Tick)",
+                detailText: "APK ready hai — neeche Download APK button se file download karein.",
+                isSuccess: true
+            });
+
+            if (downloadBtn) {
+                if (downloadUrl) {
+                    downloadBtn.href = downloadUrl;
+                    downloadBtn.classList.remove("pointer-events-none", "opacity-50");
+                } else {
+                    downloadBtn.removeAttribute("href");
+                }
+            }
+            if (downloadBox) {
+                downloadBox.classList.remove("hide");
+            }
+            if (statusEl) {
+                statusEl.textContent = messageText;
+                statusEl.className = "text-xs font-semibold text-emerald-600 mt-2";
+                statusEl.classList.remove("hide");
+            }
+        }
+
+        function failBuildProgress(errorMessage) {
+            clearBuildTimers();
+            currentBuildState.active = false;
+
+            const buildBtn = document.getElementById("buildSalonApkBtn");
+            const downloadBox = document.getElementById("apkDownloadBox");
+            const statusEl = document.getElementById("pwaSaveStatus");
+
+            if (buildBtn) {
+                buildBtn.disabled = false;
+                buildBtn.innerHTML = `<i class="fa-brands fa-android mr-1.5"></i> Build APK`;
+            }
+            if (downloadBox) {
+                downloadBox.classList.add("hide");
+            }
+
+            setBuildProgressUi({
+                percent: 100,
+                stepText: "Build Failed",
+                detailText: errorMessage,
+                isError: true
+            });
+
+            if (statusEl) {
+                statusEl.textContent = "Build error: " + errorMessage;
+                statusEl.className = "text-xs font-semibold text-rose-600 mt-2";
+                statusEl.classList.remove("hide");
+            }
+        }
+
+        function buildStatusEndpointUrl(data) {
+            if (data?.statusUrl) return data.statusUrl;
+            const bId = data?.buildId || currentBuildState.buildId || "";
+            const startedAt = currentBuildState.startedAtMs || "";
+            const appN = document.getElementById("pwaAppNameInput")?.value.trim() || "";
+            const url = new URL(APK_WORKER_URL);
+            url.searchParams.set("action", "status");
+            if (activeSalonSlug) url.searchParams.set("salonId", activeSalonSlug);
+            if (bId) url.searchParams.set("buildId", String(bId));
+            if (startedAt) url.searchParams.set("startedAt", String(startedAt));
+            if (appN) url.searchParams.set("appName", appN);
+            return url.toString();
+        }
+
+        function tickEstimatedProgress() {
+            if (!currentBuildState.active) return;
+            const elapsedSec = Math.max(0, Math.floor((Date.now() - currentBuildState.startedAtMs) / 1000));
+            const estSec = currentBuildState.estimatedSec || DEFAULT_ESTIMATED_BUILD_SEC;
+
+            // Only auto-complete via timer if Worker does NOT support live status polling
+            if (!currentBuildState.hasStatusEndpoint && elapsedSec >= estSec + 10) {
+                revealDownloadOption(
+                    currentBuildState.downloadUrl,
+                    "Build complete! Aapka APK download ke liye ready hai."
+                );
+                return;
+            }
+
+            const rawRatio = elapsedSec / estSec;
+            const estimatedPct = rawRatio < 1
+                ? Math.min(95, Math.round(15 + rawRatio * 80))
+                : 96;
+
+            const stepLabel = elapsedSec < 12
+                ? "GitHub Workflow Triggered & Queued..."
+                : elapsedSec < 32
+                    ? "Setting up Android Build Environment..."
+                    : "Waiting for GitHub Action Green Tick...";
+
+            setBuildProgressUi({
+                percent: estimatedPct,
+                stepText: stepLabel,
+                detailText: `Elapsed: ${formatElapsed(elapsedSec)} • Green tick aate hi Download option khulega.`
+            });
+        }
+
+        async function pollGitHubActionStatus() {
+            if (!currentBuildState.active) return;
+
+            const endpoint = currentBuildState.statusUrl || buildStatusEndpointUrl({
+                buildId: currentBuildState.buildId
+            });
+
+            try {
+                const res = await fetch(endpoint, { cache: "no-store" });
+                if (!res.ok) return;
+                const info = await res.json();
+
+                const resolvedDownload = info.apkDownloadUrl || info.downloadUrl || info.artifactUrl || currentBuildState.downloadUrl;
+                if (resolvedDownload) {
+                    currentBuildState.downloadUrl = resolvedDownload;
+                }
+
+                const status = String(info.status || info.state || info.workflowStatus || "").toLowerCase();
+                const conclusion = String(info.conclusion || info.result || "").toLowerCase();
+                const isReadyFlag = Boolean(info.ready || info.completed || info.success);
+
+                if (
+                    isReadyFlag ||
+                    conclusion === "success" ||
+                    status === "success" ||
+                    status === "completed_success" ||
+                    status === "ready"
+                ) {
+                    revealDownloadOption(
+                        currentBuildState.downloadUrl,
+                        info.message || "GitHub Actions build green tick ke saath complete ho gaya! Download APK ready hai."
+                    );
+                    return;
+                }
+
+                if (
+                    conclusion === "failure" ||
+                    conclusion === "cancelled" ||
+                    conclusion === "timed_out" ||
+                    status === "failed" ||
+                    status === "failure" ||
+                    status === "error"
+                ) {
+                    failBuildProgress(info.error || info.message || `GitHub Action build ${conclusion || status} ho gaya.`);
+                    return;
+                }
+
+                if (typeof info.progress === "number" && !Number.isNaN(info.progress)) {
+                    const elapsedSec = Math.max(0, Math.floor((Date.now() - currentBuildState.startedAtMs) / 1000));
+                    setBuildProgressUi({
+                        percent: Math.min(97, info.progress),
+                        stepText: info.step || "GitHub Action build in progress...",
+                        detailText: `Elapsed: ${formatElapsed(elapsedSec)} • Green tick ka intezar hai...`
+                    });
+                }
+            } catch (_) {
+                // Keep progress running until status endpoint responds
+            }
+        }
+
         async function loadExistingAppBuilderConfig(slug) {
             const cleanSlug = normalizeSalonId(slug);
             if (!cleanSlug) return;
@@ -148,10 +366,6 @@
                 splashSkipped = Boolean(pwa.splashSkipped) || !hasDistinctSplash;
                 uploadedSplashDataUrl = hasDistinctSplash ? pwa.splashUrl : "";
                 updateSplashStatusText();
-
-                if (pwa.appName || pwa.logoUrl || pwa.splashUrl) {
-                    renderUserAppLinkBox(cleanSlug);
-                }
             } catch (err) {
                 console.warn("Failed to load PWA config:", err);
             }
@@ -168,25 +382,6 @@
             const splashInput = document.getElementById("pwaSplashFileInput");
             if (splashInput) splashInput.value = "";
             updateSplashStatusText();
-        };
-
-        window.copyUserAppLink = async function() {
-            const input = document.getElementById("pwaUserAppLinkInput");
-            const statusEl = document.getElementById("pwaSaveStatus");
-            if (!input?.value) return;
-
-            try {
-                await navigator.clipboard.writeText(input.value);
-            } catch (_) {
-                input.select();
-                document.execCommand("copy");
-            }
-
-            if (statusEl) {
-                statusEl.textContent = "User App Link copy ho gaya!";
-                statusEl.className = "text-xs font-semibold text-indigo-600 mt-2";
-                statusEl.classList.remove("hide");
-            }
         };
 
         window.buildSalonApk = async function() {
@@ -210,10 +405,34 @@
                 return;
             }
 
+            clearBuildTimers();
+            downloadBox?.classList.add("hide");
+            if (downloadBtn) downloadBtn.removeAttribute("href");
+
             const userAppUrl = getUserAppUrl(activeSalonSlug);
 
             buildBtn.disabled = true;
             buildBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1.5"></i> Building...`;
+
+            currentBuildState = {
+                active: true,
+                startedAtMs: Date.now(),
+                estimatedSec: DEFAULT_ESTIMATED_BUILD_SEC,
+                downloadUrl: "",
+                statusUrl: buildStatusEndpointUrl({}),
+                runId: "",
+                buildId: "",
+                hasStatusEndpoint: false
+            };
+
+            setBuildProgressUi({
+                percent: 15,
+                stepText: "Triggering GitHub Build...",
+                detailText: "Elapsed: 0s • Green tick aate hi Download APK option realtime show hoga."
+            });
+
+            tickEstimatedProgress();
+            apkElapsedTimer = setInterval(tickEstimatedProgress, 1000);
 
             try {
                 await setDoc(getSalonDocRef(activeSalonSlug), {
@@ -221,35 +440,54 @@
                     updatedAt: serverTimestamp()
                 }, { merge: true });
 
-                renderUserAppLinkBox(activeSalonSlug);
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 25000);
 
-                const res = await fetch(APK_WORKER_URL, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        salonId: activeSalonSlug,
-                        appName,
-                        userAppUrl
-                    })
-                });
+                let res;
+                try {
+                    res = await fetch(APK_WORKER_URL, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            salonId: activeSalonSlug,
+                            appName,
+                            userAppUrl
+                        }),
+                        signal: controller.signal
+                    });
+                } finally {
+                    clearTimeout(timeoutId);
+                }
 
                 const data = await res.json();
                 if (!res.ok || !data.ok) {
                     throw new Error(data.error || "APK build trigger nahi ho paya");
                 }
 
-                downloadBtn.href = data.apkDownloadUrl;
-                downloadBox.classList.remove("hide");
-                statusEl.textContent = "APK build start ho gaya! GitHub Actions ~2–3 minute mein APK ready karega, phir Download APK se file download karein.";
-                statusEl.className = "text-xs font-semibold text-emerald-600 mt-2";
+                const estSec = Number(data.estimatedSeconds || data.etaSeconds || DEFAULT_ESTIMATED_BUILD_SEC) || DEFAULT_ESTIMATED_BUILD_SEC;
+                const buildId = String(data.buildId || "");
+                const runId = String(data.runId || data.workflowRunId || data.jobId || "");
+                const apkDownloadUrl = data.apkDownloadUrl || data.downloadUrl || "";
+                const hasStatusEndpoint = Boolean(data.statusUrl || data.supportsStatus || buildId || runId);
+
+                currentBuildState.estimatedSec = estSec;
+                currentBuildState.downloadUrl = apkDownloadUrl || currentBuildState.downloadUrl;
+                currentBuildState.buildId = buildId;
+                currentBuildState.runId = runId;
+                currentBuildState.hasStatusEndpoint = hasStatusEndpoint;
+                currentBuildState.statusUrl = buildStatusEndpointUrl(data);
+
+                statusEl.textContent = "GitHub Action build start ho gaya! Green tick aate hi Download APK option show hoga.";
+                statusEl.className = "text-xs font-semibold text-cyan-700 mt-2";
                 statusEl.classList.remove("hide");
+
+                setTimeout(pollGitHubActionStatus, 1500);
+                apkPollTimer = setInterval(pollGitHubActionStatus, POLL_INTERVAL_MS);
             } catch (err) {
-                statusEl.textContent = "Build error: " + (err.message || "Try again");
-                statusEl.className = "text-xs font-semibold text-rose-600 mt-2";
-                statusEl.classList.remove("hide");
-            } finally {
-                buildBtn.disabled = false;
-                buildBtn.innerHTML = `<i class="fa-brands fa-android mr-1.5"></i> Build APK`;
+                const msg = err?.name === "AbortError"
+                    ? "Worker response timeout ho gaya. Network check karke dubara try karein."
+                    : (err?.message || "Try again");
+                failBuildProgress(msg);
             }
         };
 
@@ -318,7 +556,6 @@
                         updatedAt: serverTimestamp()
                     }, { merge: true });
 
-                    renderUserAppLinkBox(activeSalonSlug);
                     statusEl.textContent = "Mobile App settings save ho gayi! App Name, Logo aur Splash image user app par active hain.";
                     statusEl.className = "text-xs font-semibold text-emerald-600 mt-2";
                     statusEl.classList.remove("hide");
@@ -460,30 +697,25 @@
                 </div>
                 <p id="pwaSaveStatus" class="hide text-xs font-semibold mt-2"></p>
 
-                <!-- User App Link Box -->
-                <div id="pwaGeneratedLinkBox" class="hide bg-slate-900 text-white p-4 rounded-2xl space-y-3 border border-slate-800">
+                <!-- Live Build Progress Box -->
+                <div id="apkBuildProgressBox" class="hide bg-slate-900 text-white p-4 rounded-2xl space-y-3 border border-slate-800">
                     <div class="flex items-center justify-between gap-2">
-                        <span class="text-xs font-bold text-cyan-400">User App Link Ready</span>
-                        <span class="text-[10px] text-slate-400">Salon Web App URL</span>
+                        <span class="text-xs font-bold text-cyan-300 flex items-center gap-2">
+                            <i class="fa-solid fa-circle-notch fa-spin text-cyan-400"></i>
+                            <span id="apkProgressStepText">Building APK on GitHub Actions...</span>
+                        </span>
+                        <span id="apkProgressPercent" class="text-xs font-extrabold text-emerald-400">0%</span>
                     </div>
-                    <input id="pwaUserAppLinkInput" type="text" readonly
-                        class="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-[11px] text-slate-200 outline-none">
-                    <div class="flex flex-wrap gap-2">
-                        <button type="button" onclick="copyUserAppLink()"
-                            class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold cursor-pointer">
-                            <i class="fa-solid fa-copy mr-1"></i> Copy Link
-                        </button>
-                        <a id="openUserAppLinkBtn" href="#" target="_blank"
-                            class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold inline-flex items-center">
-                            <i class="fa-solid fa-arrow-up-right-from-square mr-1.5"></i> Open User App
-                        </a>
+                    <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                        <div id="apkProgressBar" class="h-full w-0 bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-300 rounded-full"></div>
                     </div>
+                    <p id="apkProgressDetailText" class="text-[11px] text-slate-300">Green tick aate hi Download APK option realtime show hoga.</p>
                 </div>
 
                 <!-- APK Download Box -->
                 <div id="apkDownloadBox" class="hide bg-emerald-950 text-white p-4 rounded-2xl space-y-2.5 border border-emerald-800">
-                    <p class="text-xs font-bold text-emerald-300">APK Build Triggered!</p>
-                    <p class="text-[11px] text-emerald-100/90">GitHub Actions ~2–3 minute mein APK ready karega. Build complete hone ke baad neeche button se `.apk` download karke install karein:</p>
+                    <p class="text-xs font-bold text-emerald-300"><i class="fa-solid fa-circle-check mr-1"></i> APK Ready</p>
+                    <p class="text-[11px] text-emerald-100/90">Aapka Android APK ready hai. Neeche button se `.apk` file download karke install karein:</p>
                     <a id="downloadApkLinkBtn" href="#" target="_blank"
                         class="inline-flex items-center px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">
                         <i class="fa-solid fa-download mr-1.5"></i> Download APK
