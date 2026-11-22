@@ -122,6 +122,53 @@ jobs:
                       dst.write(src.read())
           EOF
 
+      - name: Ensure Android Gradle Plugin Repository
+        working-directory: android-builder
+        shell: bash
+        run: |
+          python3 - << 'EOF'
+          import os
+
+          settings_path = "settings.gradle"
+          if not os.path.exists(settings_path):
+              with open(settings_path, "w", encoding="utf-8") as f:
+                  f.write("rootProject.name = 'android-builder'\ninclude ':app'\n")
+
+          with open(settings_path, "r", encoding="utf-8") as f:
+              s_content = f.read()
+
+          if "pluginManagement" not in s_content:
+              pm_block = """pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    plugins {
+        id 'com.android.application' version '8.3.2' apply false
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+"""
+              s_content = pm_block + "\n" + s_content
+              with open(settings_path, "w", encoding="utf-8") as f:
+                  f.write(s_content)
+
+          root_gradle = "build.gradle"
+          if not os.path.exists(root_gradle):
+              with open(root_gradle, "w", encoding="utf-8") as f:
+                  f.write("""plugins {
+    id 'com.android.application' version '8.3.2' apply false
+}
+""")
+          EOF
+
       - name: Build Debug APK
         working-directory: android-builder
         run: gradle assembleDebug
