@@ -24,9 +24,10 @@
 
     <script type="module">
         import { onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { onSnapshot, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
         import {
             auth,
+            DEFAULT_SALON_SLUG,
             resolveActiveSalonId,
             buildSalonUrl,
             getSalonDocRef,
@@ -34,10 +35,18 @@
             getCustomerDocRef
         } from "./tenant.js";
 
-        let activeSalonId = resolveActiveSalonId({ persist: true });
+        let activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
         let currentUser = null;
         let listenersActiveKey = "";
         let unsubscribers = [];
+
+        function safeNavigate(urlStr) {
+            try {
+                window.location.assign(urlStr);
+            } catch (_) {
+                window.location.href = urlStr;
+            }
+        }
 
         function clearListeners() {
             unsubscribers.forEach((fn) => {
@@ -66,11 +75,11 @@
 
         window.goToCategory = function(categoryName) {
             const cleanCategory = String(categoryName || "").trim();
-            window.location.href = buildSalonUrl("category.html", activeSalonId, { category: cleanCategory });
+            safeNavigate(buildSalonUrl("category.html", activeSalonId, { category: cleanCategory }));
         };
 
         window.goToBooking = function(serviceInfo) {
-            window.location.href = buildSalonUrl("booking.html", activeSalonId, { service: serviceInfo });
+            safeNavigate(buildSalonUrl("booking.html", activeSalonId, { service: serviceInfo }));
         };
 
         window.logout = async function() {
@@ -82,7 +91,7 @@
             } catch (e) {
                 console.error("Sign out error:", e);
             }
-            window.location.href = buildSalonUrl("index.html", activeSalonId);
+            safeNavigate(buildSalonUrl("index.html", activeSalonId));
         };
 
         function updateHeaderUser(user, profileDocData = null, salonData = null) {
@@ -94,12 +103,16 @@
                 salonData?.salonName ||
                 activeSalonId ||
                 "Customer";
-            document.getElementById("welcomeUserName").innerText = displayName;
-            document.getElementById("userAvatar").innerText = String(displayName).charAt(0).toUpperCase() || "C";
+            const nameEl = document.getElementById("welcomeUserName");
+            const avatarEl = document.getElementById("userAvatar");
+            if (nameEl) nameEl.innerText = displayName;
+            if (avatarEl) avatarEl.innerText = String(displayName).charAt(0).toUpperCase() || "C";
         }
 
         function renderServicesList(servicesDocs, bookingsDocs) {
             const container = document.getElementById("serviceListContainer");
+            if (!container) return;
+
             const bookingCounts = {};
             bookingsDocs.forEach((b) => {
                 const rawLabel = String(b.service || b.serviceName || b.selectedService || "").trim().toLowerCase();
@@ -159,9 +172,7 @@
 
         function startRealtimeSalonListeners(user) {
             if (!activeSalonId) {
-                document.getElementById("serviceListContainer").innerHTML =
-                    `<p class="text-xs text-gray-400 text-center py-4">Please open via a salon booking link (?salon=...).</p>`;
-                return;
+                activeSalonId = DEFAULT_SALON_SLUG;
             }
 
             const key = `${activeSalonId}::${user?.uid || "guest"}`;
@@ -169,133 +180,148 @@
             clearListeners();
             listenersActiveKey = key;
             syncNavLinks();
+            updateHeaderUser(user, null, null);
 
             let latestServices = [];
             let latestBookings = [];
             let latestSalonData = null;
 
-            unsubscribers.push(
-                onSnapshot(getSalonDocRef(activeSalonId), (snap) => {
-                    latestSalonData = snap.exists() ? snap.data() : null;
-                    updateHeaderUser(user, null, latestSalonData);
-                }, () => {})
-            );
+            try {
+                unsubscribers.push(
+                    onSnapshot(getSalonDocRef(activeSalonId), (snap) => {
+                        latestSalonData = snap.exists() ? snap.data() : null;
+                        updateHeaderUser(user, null, latestSalonData);
+                    }, () => {})
+                );
+            } catch (_) {}
 
             if (user) {
-                unsubscribers.push(
-                    onSnapshot(getCustomerDocRef(activeSalonId, user.uid), (snap) => {
-                        updateHeaderUser(user, snap.exists() ? snap.data() : null, latestSalonData);
-                    }, () => updateHeaderUser(user, null, latestSalonData))
-                );
-            } else {
-                updateHeaderUser(null, null, latestSalonData);
+                try {
+                    unsubscribers.push(
+                        onSnapshot(getCustomerDocRef(activeSalonId, user.uid), (snap) => {
+                            updateHeaderUser(user, snap.exists() ? snap.data() : null, latestSalonData);
+                        }, () => updateHeaderUser(user, null, latestSalonData))
+                    );
+                } catch (_) {}
             }
 
-            unsubscribers.push(
-                onSnapshot(getSalonSubcollectionRef(activeSalonId, "announcements"), (querySnapshot) => {
-                    const wrapper = document.getElementById("announcementWrapper");
-                    const ticker = document.getElementById("scrollingAnnouncementText");
-                    const messages = [];
-                    querySnapshot.forEach((docSnap) => {
-                        const a = docSnap.data();
-                        if (a.message) {
-                            messages.push(`🔥 <b>${a.title || "UPDATE"}:</b> ${a.message}`);
+            try {
+                unsubscribers.push(
+                    onSnapshot(getSalonSubcollectionRef(activeSalonId, "announcements"), (querySnapshot) => {
+                        const wrapper = document.getElementById("announcementWrapper");
+                        const ticker = document.getElementById("scrollingAnnouncementText");
+                        const messages = [];
+                        querySnapshot.forEach((docSnap) => {
+                            const a = docSnap.data();
+                            if (a.message) {
+                                messages.push(`🔥 <b>${a.title || "UPDATE"}:</b> ${a.message}`);
+                            }
+                        });
+                        if (messages.length > 0 && ticker && wrapper) {
+                            ticker.innerHTML = messages.join(" &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; ");
+                            wrapper.classList.remove("hidden");
+                        } else if (wrapper) {
+                            wrapper.classList.add("hidden");
                         }
-                    });
-                    if (messages.length > 0) {
-                        ticker.innerHTML = messages.join(" &nbsp;&nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;&nbsp; ");
-                        wrapper.classList.remove("hidden");
-                    } else {
-                        wrapper.classList.add("hidden");
-                    }
-                })
-            );
+                    }, () => {})
+                );
+            } catch (_) {}
 
-            unsubscribers.push(
-                onSnapshot(getSalonSubcollectionRef(activeSalonId, "banners"), (querySnapshot) => {
-                    const container = document.getElementById("bannerSliderContainer");
-                    const defaultBannerImg = "https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1200&q=80";
-                    let html = "";
-                    querySnapshot.forEach((docSnap) => {
-                        const b = docSnap.data();
-                        const bgImg = (b.image && b.image.trim() !== "") ? b.image.trim() : defaultBannerImg;
-                        const hasTag = Boolean(b.tag && String(b.tag).trim() !== "");
-                        const hasTitle = Boolean(b.title && String(b.title).trim() !== "");
-                        const hasSubtitle = Boolean(b.subtitle && String(b.subtitle).trim() !== "");
-                        const hasAnyText = hasTag || hasTitle || hasSubtitle;
+            try {
+                unsubscribers.push(
+                    onSnapshot(getSalonSubcollectionRef(activeSalonId, "banners"), (querySnapshot) => {
+                        const container = document.getElementById("bannerSliderContainer");
+                        if (!container) return;
+                        const defaultBannerImg = "https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=1200&q=80";
+                        let html = "";
+                        querySnapshot.forEach((docSnap) => {
+                            const b = docSnap.data();
+                            const bgImg = (b.image && b.image.trim() !== "") ? b.image.trim() : defaultBannerImg;
+                            const hasTag = Boolean(b.tag && String(b.tag).trim() !== "");
+                            const hasTitle = Boolean(b.title && String(b.title).trim() !== "");
+                            const hasSubtitle = Boolean(b.subtitle && String(b.subtitle).trim() !== "");
+                            const hasAnyText = hasTag || hasTitle || hasSubtitle;
 
-                        html += `
-                            <div class="min-w-full h-36 rounded-3xl overflow-hidden relative shadow-md flex items-center p-5 text-white" style="background: linear-gradient(135deg, ${b.bgColor || "#4f46e5"}, ${b.bgColor2 || "#9333ea"});">
-                                <img
-                                    src="${bgImg}"
-                                    class="absolute inset-0 w-full h-full object-cover object-center z-0"
-                                    alt="${hasTitle ? b.title : "Salon Banner"}"
-                                    onerror="this.src='${defaultBannerImg}'"
-                                >
-                                ${hasAnyText ? `
-                                    <div class="w-4/5 space-y-1 relative z-10">
-                                        ${hasTag ? `<span class="inline-block bg-white/25 backdrop-blur-xs text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">${b.tag}</span>` : ""}
-                                        ${hasTitle ? `<h3 class="text-sm font-bold leading-snug">${b.title}</h3>` : ""}
-                                        ${hasSubtitle ? `<p class="text-[11px] text-white/95 line-clamp-2">${b.subtitle}</p>` : ""}
-                                    </div>
-                                ` : ""}
-                            </div>
-                        `;
-                    });
-                    container.innerHTML = html !== "" ? html : `
-                        <div class="min-w-full h-36 bg-indigo-600 rounded-3xl overflow-hidden relative shadow-md flex items-center text-white">
-                            <img src="${defaultBannerImg}" class="absolute inset-0 w-full h-full object-cover object-center z-0" alt="Salon Banner">
-                        </div>
-                    `;
-                })
-            );
-
-            unsubscribers.push(
-                onSnapshot(getSalonSubcollectionRef(activeSalonId, "categories"), (querySnapshot) => {
-                    const container = document.getElementById("categoryContainer");
-                    let html = "";
-                    querySnapshot.forEach((docSnap) => {
-                        const c = docSnap.data();
-                        const safeCategoryName = String(c.name || "Category").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-                        html += `
-                            <div
-                                role="button"
-                                tabindex="0"
-                                onclick="goToCategory('${safeCategoryName}')"
-                                onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goToCategory('${safeCategoryName}');}"
-                                class="flex flex-col items-center group cursor-pointer active:scale-95 transition"
-                            >
-                                <div class="w-full h-16 bg-indigo-50 group-hover:bg-indigo-100/80 border border-indigo-100 group-hover:border-indigo-300 rounded-2xl overflow-hidden shadow-sm flex items-center justify-center p-2 mb-1 transition">
-                                    <img src="${c.image || "https://cdn-icons-png.flaticon.com/512/3067/3067451.png"}" class="w-full h-full object-contain" alt="${c.name || "Category"}">
+                            html += `
+                                <div class="min-w-full h-36 rounded-3xl overflow-hidden relative shadow-md flex items-center p-5 text-white" style="background: linear-gradient(135deg, ${b.bgColor || "#4f46e5"}, ${b.bgColor2 || "#9333ea"});">
+                                    <img
+                                        src="${bgImg}"
+                                        class="absolute inset-0 w-full h-full object-cover object-center z-0"
+                                        alt="${hasTitle ? b.title : "Salon Banner"}"
+                                        onerror="this.src='${defaultBannerImg}'"
+                                    >
+                                    ${hasAnyText ? `
+                                        <div class="w-4/5 space-y-1 relative z-10">
+                                            ${hasTag ? `<span class="inline-block bg-white/25 backdrop-blur-xs text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider">${b.tag}</span>` : ""}
+                                            ${hasTitle ? `<h3 class="text-sm font-bold leading-snug">${b.title}</h3>` : ""}
+                                            ${hasSubtitle ? `<p class="text-[11px] text-white/95 line-clamp-2">${b.subtitle}</p>` : ""}
+                                        </div>
+                                    ` : ""}
                                 </div>
-                                <p class="text-[11px] font-bold text-gray-800 group-hover:text-indigo-600 text-center truncate w-full transition">${c.name || "Category"}</p>
+                            `;
+                        });
+                        container.innerHTML = html !== "" ? html : `
+                            <div class="min-w-full h-36 bg-indigo-600 rounded-3xl overflow-hidden relative shadow-md flex items-center text-white">
+                                <img src="${defaultBannerImg}" class="absolute inset-0 w-full h-full object-cover object-center z-0" alt="Salon Banner">
                             </div>
                         `;
-                    });
-                    container.innerHTML = html === "" ? `<p class="text-xs text-gray-400 col-span-4 text-center">No categories found for this salon.</p>` : html;
-                })
-            );
+                    }, () => {})
+                );
+            } catch (_) {}
 
-            unsubscribers.push(
-                onSnapshot(getSalonSubcollectionRef(activeSalonId, "services"), (snap) => {
-                    latestServices = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-                    renderServicesList(latestServices, latestBookings);
-                })
-            );
+            try {
+                unsubscribers.push(
+                    onSnapshot(getSalonSubcollectionRef(activeSalonId, "categories"), (querySnapshot) => {
+                        const container = document.getElementById("categoryContainer");
+                        if (!container) return;
+                        let html = "";
+                        querySnapshot.forEach((docSnap) => {
+                            const c = docSnap.data();
+                            const safeCategoryName = String(c.name || "Category").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+                            html += `
+                                <div
+                                    role="button"
+                                    tabindex="0"
+                                    onclick="goToCategory('${safeCategoryName}')"
+                                    onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goToCategory('${safeCategoryName}');}"
+                                    class="flex flex-col items-center group cursor-pointer active:scale-95 transition"
+                                >
+                                    <div class="w-full h-16 bg-indigo-50 group-hover:bg-indigo-100/80 border border-indigo-100 group-hover:border-indigo-300 rounded-2xl overflow-hidden shadow-sm flex items-center justify-center p-2 mb-1 transition">
+                                        <img src="${c.image || "https://cdn-icons-png.flaticon.com/512/3067/3067451.png"}" class="w-full h-full object-contain" alt="${c.name || "Category"}">
+                                    </div>
+                                    <p class="text-[11px] font-bold text-gray-800 group-hover:text-indigo-600 text-center truncate w-full transition">${c.name || "Category"}</p>
+                                </div>
+                            `;
+                        });
+                        container.innerHTML = html === "" ? `<p class="text-xs text-gray-400 col-span-4 text-center">No categories found for this salon.</p>` : html;
+                    }, () => {})
+                );
+            } catch (_) {}
 
-            unsubscribers.push(
-                onSnapshot(getSalonSubcollectionRef(activeSalonId, "bookings"), (snap) => {
-                    latestBookings = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-                    renderServicesList(latestServices, latestBookings);
-                }, () => {})
-            );
+            try {
+                unsubscribers.push(
+                    onSnapshot(getSalonSubcollectionRef(activeSalonId, "services"), (snap) => {
+                        latestServices = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+                        renderServicesList(latestServices, latestBookings);
+                    }, () => {})
+                );
+            } catch (_) {}
+
+            try {
+                unsubscribers.push(
+                    onSnapshot(getSalonSubcollectionRef(activeSalonId, "bookings"), (snap) => {
+                        latestBookings = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+                        renderServicesList(latestServices, latestBookings);
+                    }, () => {})
+                );
+            } catch (_) {}
         }
 
         startRealtimeSalonListeners(null);
 
         onAuthStateChanged(auth, (user) => {
             currentUser = user;
-            activeSalonId = resolveActiveSalonId({ persist: true }) || activeSalonId;
+            activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || activeSalonId;
             startRealtimeSalonListeners(user);
         });
     </script>
