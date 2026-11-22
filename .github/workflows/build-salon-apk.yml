@@ -12,24 +12,34 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK Licenses
         shell: bash
         run: |
-          SDK_DIR="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          mkdir -p "$SDK_DIR/licenses"
-          printf "8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5fe056a056d0f5aa4e7ec62df9fe2666622e\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$SDK_DIR/licenses/android-sdk-license"
-          printf "84831b9409646a918e30573bab4c9c91346d8abd\n504667f4c0de7af1a06de9f4b1727b84351f2910" > "$SDK_DIR/licenses/android-sdk-preview-license"
-          printf "d975f751698a77b662f1254ddbe6f345d6ce1a32" > "$SDK_DIR/licenses/google-gdk-license"
-          printf "601085b94cd77f0b54ff86406957099ebe79c4d6" > "$SDK_DIR/licenses/android-googletv-license"
+          set -e
+          ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+
+          if [ ! -d "$ANDROID_SDK_ROOT/cmdline-tools/latest" ]; then
+            curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
+            unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools_extract
+            mv /tmp/cmdtools_extract/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            rm -rf /tmp/cmdtools.zip /tmp/cmdtools_extract
+          fi
+
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
+
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
