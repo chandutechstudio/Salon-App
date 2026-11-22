@@ -106,6 +106,21 @@
             }
         }
 
+        function buildPwaConfigPayload(appName) {
+            const hasCustomSplash = !splashSkipped && Boolean(uploadedSplashDataUrl);
+            const effectiveSplashUrl = hasCustomSplash
+                ? uploadedSplashDataUrl
+                : (uploadedLogoDataUrl || "");
+
+            return {
+                appName,
+                logoUrl: uploadedLogoDataUrl || "",
+                splashUrl: effectiveSplashUrl,
+                splashSkipped: !hasCustomSplash,
+                updatedAtMs: Date.now()
+            };
+        }
+
         async function loadExistingAppBuilderConfig(slug) {
             const cleanSlug = normalizeSalonId(slug);
             if (!cleanSlug) return;
@@ -129,8 +144,9 @@
                     logoPlaceholder?.classList.add("hide");
                 }
 
-                splashSkipped = Boolean(pwa.splashSkipped) || (!pwa.splashUrl && Boolean(pwa.logoUrl));
-                uploadedSplashDataUrl = splashSkipped ? "" : (pwa.splashUrl || "");
+                const hasDistinctSplash = Boolean(pwa.splashUrl) && pwa.splashUrl !== pwa.logoUrl;
+                splashSkipped = Boolean(pwa.splashSkipped) || !hasDistinctSplash;
+                uploadedSplashDataUrl = hasDistinctSplash ? pwa.splashUrl : "";
                 updateSplashStatusText();
 
                 if (pwa.appName || pwa.logoUrl || pwa.splashUrl) {
@@ -175,9 +191,6 @@
 
         window.buildSalonApk = async function() {
             const appName = document.getElementById("pwaAppNameInput")?.value.trim() || "";
-            const finalSplashUrl = (!splashSkipped && uploadedSplashDataUrl)
-                ? uploadedSplashDataUrl
-                : uploadedLogoDataUrl;
             const statusEl = document.getElementById("pwaSaveStatus");
             const buildBtn = document.getElementById("buildSalonApkBtn");
             const downloadBox = document.getElementById("apkDownloadBox");
@@ -204,13 +217,7 @@
 
             try {
                 await setDoc(getSalonDocRef(activeSalonSlug), {
-                    pwaConfig: {
-                        appName,
-                        logoUrl: uploadedLogoDataUrl || "",
-                        splashUrl: finalSplashUrl || "",
-                        splashSkipped: splashSkipped || !uploadedSplashDataUrl,
-                        updatedAtMs: Date.now()
-                    },
+                    pwaConfig: buildPwaConfigPayload(appName),
                     updatedAt: serverTimestamp()
                 }, { merge: true });
 
@@ -287,9 +294,6 @@
 
             saveBtn?.addEventListener("click", async () => {
                 const appName = document.getElementById("pwaAppNameInput").value.trim();
-                const finalSplashUrl = (!splashSkipped && uploadedSplashDataUrl)
-                    ? uploadedSplashDataUrl
-                    : uploadedLogoDataUrl;
 
                 if (!activeSalonSlug) {
                     statusEl.textContent = "Active salon ID nahi mila. Kripya page refresh karein.";
@@ -310,13 +314,7 @@
 
                 try {
                     await setDoc(getSalonDocRef(activeSalonSlug), {
-                        pwaConfig: {
-                            appName,
-                            logoUrl: uploadedLogoDataUrl || "",
-                            splashUrl: finalSplashUrl || "",
-                            splashSkipped: splashSkipped || !uploadedSplashDataUrl,
-                            updatedAtMs: Date.now()
-                        },
+                        pwaConfig: buildPwaConfigPayload(appName),
                         updatedAt: serverTimestamp()
                     }, { merge: true });
 
