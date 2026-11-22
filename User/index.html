@@ -12,7 +12,7 @@
     <style>.hide { display: none !important; }</style>
 
     <script>
-        window.__dismissSplashNow = function(immediate) {
+        window.__dismissSplashNow = function() {
             try {
                 window.__splashDismissed = true;
                 var splash = document.getElementById("salonSplashScreen");
@@ -35,6 +35,17 @@
             if (!errorBox) return;
             errorBox.innerText = "";
             errorBox.classList.add("hide");
+        };
+
+        window.__goToUrl = function(urlStr) {
+            if (!urlStr) return;
+            try {
+                window.location.href = urlStr;
+            } catch (_) {
+                try {
+                    window.location.assign(urlStr);
+                } catch (_) {}
+            }
         };
 
         window.switchAuthView = function(view) {
@@ -60,22 +71,22 @@
         };
 
         document.addEventListener("DOMContentLoaded", function() {
-            window.__dismissSplashNow(true);
+            window.__dismissSplashNow();
         });
 
         setTimeout(function() {
-            window.__dismissSplashNow(true);
-        }, 600);
+            window.__dismissSplashNow();
+        }, 400);
 
         window.addEventListener("error", function(ev) {
-            window.__dismissSplashNow(true);
+            window.__dismissSplashNow();
             if (ev && ev.message) {
                 console.error("Page error:", ev.message);
             }
         });
 
         window.addEventListener("unhandledrejection", function(ev) {
-            window.__dismissSplashNow(true);
+            window.__dismissSplashNow();
             if (ev && ev.reason) {
                 console.error("Unhandled rejection:", ev.reason);
             }
@@ -94,7 +105,6 @@
             auth,
             DEFAULT_SALON_SLUG,
             resolveActiveSalonId,
-            resolveCanonicalSalonId,
             buildSalonUrl,
             getSalonDocRef,
             getCustomerDocRef
@@ -109,7 +119,7 @@
             return String(slug || "").trim().toLowerCase();
         }
 
-        function withTimeout(promise, ms = 1000, fallbackValue = null) {
+        function withTimeout(promise, ms = 800, fallbackValue = null) {
             return Promise.race([
                 promise.catch(() => fallbackValue),
                 new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms))
@@ -117,7 +127,7 @@
         }
 
         try {
-            activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
+            activeSalonId = normalizeSlugSafe(resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG })) || DEFAULT_SALON_SLUG;
         } catch (_) {
             activeSalonId = DEFAULT_SALON_SLUG;
         }
@@ -130,7 +140,7 @@
         });
 
         async function applyDynamicSalonPwa(salonSlug) {
-            window.__dismissSplashNow(true);
+            window.__dismissSplashNow();
             const targetSlug = normalizeSlugSafe(salonSlug);
             if (!targetSlug || pwaAppliedForSlug === targetSlug) return;
             pwaAppliedForSlug = targetSlug;
@@ -143,7 +153,7 @@
             let logoUrl = "";
 
             try {
-                const snap = await withTimeout(getDoc(getSalonDocRef(targetSlug)), 1000, null);
+                const snap = await withTimeout(getDoc(getSalonDocRef(targetSlug)), 800, null);
                 if (snap && snap.exists && snap.exists()) {
                     const data = snap.data() || {};
                     const pwa = data.pwaConfig || {};
@@ -228,72 +238,67 @@
             }
         }
 
-        async function getResolvedSalonSlug() {
-            let immediateSlug = DEFAULT_SALON_SLUG;
+        function getCurrentSalonSlugFast() {
             try {
-                immediateSlug = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
+                const resolved = normalizeSlugSafe(resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }));
+                if (resolved) activeSalonId = resolved;
             } catch (_) {}
-
-            activeSalonId = immediateSlug;
-            applyDynamicSalonPwa(immediateSlug);
-
-            const canonical = await withTimeout(
-                resolveCanonicalSalonId(immediateSlug, { persist: true }),
-                900,
-                immediateSlug
-            );
-            if (canonical && canonical !== activeSalonId) {
-                activeSalonId = canonical;
-                applyDynamicSalonPwa(canonical);
-            }
-
             return activeSalonId || DEFAULT_SALON_SLUG;
         }
 
         function getPostAuthRedirectUrl(salonSlug) {
-            const targetSlug = salonSlug || activeSalonId || DEFAULT_SALON_SLUG;
-            const params = new URLSearchParams(window.location.search);
-            const rawNext = (params.get("next") || "").trim();
+            const targetSlug = normalizeSlugSafe(salonSlug || activeSalonId || DEFAULT_SALON_SLUG) || DEFAULT_SALON_SLUG;
+            let rawNext = "";
+            try {
+                const params = new URLSearchParams(window.location.search);
+                rawNext = (params.get("next") || "").trim();
+            } catch (_) {}
+
             const safePages = ["home.html", "booking.html", "payment.html", "category.html", "status.html", "history.html", "profile.html", "success.html"];
             const targetPage = safePages.includes(rawNext) ? rawNext : "home.html";
-            return buildSalonUrl(targetPage, targetSlug);
+
+            try {
+                return buildSalonUrl(targetPage, targetSlug);
+            } catch (_) {
+                return `./${targetPage}?salon=${encodeURIComponent(targetSlug)}`;
+            }
         }
 
-        async function redirectToHomeIfAuthenticated(user) {
-            if (!user || isRedirecting) return;
+        function redirectToHomeNow(user, salonSlug) {
+            if (isRedirecting) return;
             isRedirecting = true;
 
-            const slug = await getResolvedSalonSlug();
-            const displayName = user.displayName || (user.email ? user.email.split("@")[0] : "Customer");
-            sessionStorage.setItem("salonCustomerName", displayName);
-            if (user.email) {
-                sessionStorage.setItem("salonCustomerEmail", user.email.trim().toLowerCase());
-            }
-            sessionStorage.setItem("activeSalonId", slug);
+            const slug = normalizeSlugSafe(salonSlug || getCurrentSalonSlugFast()) || DEFAULT_SALON_SLUG;
+            const displayName = user?.displayName || (user?.email ? user.email.split("@")[0] : "Customer");
+            try {
+                sessionStorage.setItem("salonCustomerName", displayName);
+                if (user?.email) {
+                    sessionStorage.setItem("salonCustomerEmail", user.email.trim().toLowerCase());
+                }
+                sessionStorage.setItem("activeSalonId", slug);
+            } catch (_) {}
 
-            window.location.replace(getPostAuthRedirectUrl(slug));
+            window.__goToUrl(getPostAuthRedirectUrl(slug));
         }
 
         try {
-            onAuthStateChanged(auth, async (user) => {
-                window.__dismissSplashNow(true);
-                try {
-                    if (user) {
-                        await redirectToHomeIfAuthenticated(user);
-                    } else {
-                        await getResolvedSalonSlug();
-                    }
-                } catch (_) {}
+            onAuthStateChanged(auth, (user) => {
+                window.__dismissSplashNow();
+                if (user && !isRedirecting) {
+                    redirectToHomeNow(user, getCurrentSalonSlugFast());
+                } else if (!user) {
+                    applyDynamicSalonPwa(getCurrentSalonSlugFast());
+                }
             });
         } catch (err) {
-            window.__dismissSplashNow(true);
+            window.__dismissSplashNow();
             console.error("Auth listener init error:", err);
         }
 
-        async function syncCustomerToSalon(user, name, email, salonSlug) {
-            const salonId = salonSlug || resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
+        function syncCustomerToSalonBackground(user, name, email, salonSlug) {
+            const salonId = normalizeSlugSafe(salonSlug) || DEFAULT_SALON_SLUG;
             if (!salonId || !user) return;
-            await setDoc(
+            setDoc(
                 getCustomerDocRef(salonId, user.uid),
                 {
                     uid: user.uid,
@@ -303,7 +308,7 @@
                     updatedAt: serverTimestamp()
                 },
                 { merge: true }
-            ).catch((err) => console.warn("Customer sync warning:", err));
+            ).catch(() => {});
         }
 
         function bindAuthForms() {
@@ -333,20 +338,12 @@
                     }
 
                     try {
-                        const salonSlug = await getResolvedSalonSlug();
-                        isRedirecting = true;
+                        const salonSlug = getCurrentSalonSlugFast();
                         const userCredential = await signInWithEmailAndPassword(auth, email, pass);
                         const resolvedName = userCredential.user.displayName || email.split("@")[0];
-                        sessionStorage.setItem("salonCustomerName", resolvedName);
-                        sessionStorage.setItem("salonCustomerEmail", email);
-                        sessionStorage.setItem("activeSalonId", salonSlug);
 
-                        await Promise.race([
-                            syncCustomerToSalon(userCredential.user, resolvedName, email, salonSlug),
-                            new Promise((resolve) => setTimeout(resolve, 1500))
-                        ]);
-
-                        window.location.replace(getPostAuthRedirectUrl(salonSlug));
+                        syncCustomerToSalonBackground(userCredential.user, resolvedName, email, salonSlug);
+                        redirectToHomeNow(userCredential.user, salonSlug);
                     } catch (error) {
                         isRedirecting = false;
                         if (submitBtn) {
@@ -394,24 +391,19 @@
                     }
 
                     try {
-                        const salonSlug = await getResolvedSalonSlug();
-                        isRedirecting = true;
+                        const salonSlug = getCurrentSalonSlugFast();
                         const cred = await createUserWithEmailAndPassword(auth, email, pass);
-                        if (name) {
-                            await updateProfile(cred.user, { displayName: name }).catch(() => {});
-                        }
-
                         const resolvedName = name || email.split("@")[0];
-                        sessionStorage.setItem("salonCustomerName", resolvedName);
-                        sessionStorage.setItem("salonCustomerEmail", email);
-                        sessionStorage.setItem("activeSalonId", salonSlug);
 
-                        await Promise.race([
-                            syncCustomerToSalon(cred.user, resolvedName, email, salonSlug),
-                            new Promise((resolve) => setTimeout(resolve, 1500))
-                        ]);
+                        if (name) {
+                            updateProfile(cred.user, { displayName: name }).catch(() => {});
+                        }
+                        try {
+                            sessionStorage.setItem("salonCustomerName", resolvedName);
+                        } catch (_) {}
 
-                        window.location.replace(getPostAuthRedirectUrl(salonSlug));
+                        syncCustomerToSalonBackground(cred.user, resolvedName, email, salonSlug);
+                        redirectToHomeNow(cred.user, salonSlug);
                     } catch (error) {
                         isRedirecting = false;
                         if (submitBtn) {
