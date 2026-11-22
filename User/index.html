@@ -14,45 +14,70 @@
     <script>
         window.__dismissSplashNow = function(immediate) {
             try {
-                if (window.__splashDismissed) return;
                 window.__splashDismissed = true;
-
                 var splash = document.getElementById("salonSplashScreen");
                 if (!splash) return;
-
                 splash.style.pointerEvents = "none";
-                if (immediate) {
-                    splash.style.setProperty("display", "none", "important");
-                    if (splash.parentNode) splash.parentNode.removeChild(splash);
-                    return;
-                }
-
-                splash.style.opacity = "0";
-                setTimeout(function() {
-                    var el = document.getElementById("salonSplashScreen");
-                    if (el) {
-                        el.style.setProperty("display", "none", "important");
-                        if (el.parentNode) el.parentNode.removeChild(el);
-                    }
-                }, 250);
+                splash.style.setProperty("display", "none", "important");
+                if (splash.parentNode) splash.parentNode.removeChild(splash);
             } catch (_) {}
         };
 
-        setTimeout(function() {
-            if (typeof window.__dismissSplashNow === "function") {
-                window.__dismissSplashNow(false);
-            }
-        }, 1100);
+        window.__showAuthError = function(msg) {
+            var errorBox = document.getElementById("authError");
+            if (!errorBox) return;
+            errorBox.innerText = msg;
+            errorBox.classList.remove("hide");
+        };
 
-        window.addEventListener("error", function() {
-            if (typeof window.__dismissSplashNow === "function") {
-                window.__dismissSplashNow(true);
+        window.__clearAuthError = function() {
+            var errorBox = document.getElementById("authError");
+            if (!errorBox) return;
+            errorBox.innerText = "";
+            errorBox.classList.add("hide");
+        };
+
+        window.switchAuthView = function(view) {
+            var loginF = document.getElementById("loginForm");
+            var regF = document.getElementById("registerForm");
+            var title = document.getElementById("screenTitle");
+            var subtitle = document.getElementById("screenSubtitle");
+            window.__clearAuthError();
+
+            if (!loginF || !regF) return;
+
+            if (view === "login") {
+                loginF.classList.remove("hide");
+                regF.classList.add("hide");
+                if (title) title.innerText = "Welcome Back";
+                if (subtitle) subtitle.innerText = "Login to your user account";
+            } else if (view === "register") {
+                regF.classList.remove("hide");
+                loginF.classList.add("hide");
+                if (title) title.innerText = "Create Account";
+                if (subtitle) subtitle.innerText = "Sign up for new booking experience";
+            }
+        };
+
+        document.addEventListener("DOMContentLoaded", function() {
+            window.__dismissSplashNow(true);
+        });
+
+        setTimeout(function() {
+            window.__dismissSplashNow(true);
+        }, 600);
+
+        window.addEventListener("error", function(ev) {
+            window.__dismissSplashNow(true);
+            if (ev && ev.message) {
+                console.error("Page error:", ev.message);
             }
         });
 
-        window.addEventListener("unhandledrejection", function() {
-            if (typeof window.__dismissSplashNow === "function") {
-                window.__dismissSplashNow(true);
+        window.addEventListener("unhandledrejection", function(ev) {
+            window.__dismissSplashNow(true);
+            if (ev && ev.reason) {
+                console.error("Unhandled rejection:", ev.reason);
             }
         });
     </script>
@@ -75,18 +100,21 @@
             getCustomerDocRef
         } from "./tenant.js";
 
-        let activeSalonId = "";
+        let activeSalonId = DEFAULT_SALON_SLUG;
         let isRedirecting = false;
         let deferredInstallPrompt = null;
         let pwaAppliedForSlug = "";
 
-        function hideSplashScreen(immediate = false) {
-            if (typeof window.__dismissSplashNow === "function") {
-                window.__dismissSplashNow(immediate);
-            }
+        function normalizeSlugSafe(slug) {
+            return String(slug || "").trim().toLowerCase();
         }
 
-        setTimeout(() => hideSplashScreen(false), 1400);
+        function withTimeout(promise, ms = 1000, fallbackValue = null) {
+            return Promise.race([
+                promise.catch(() => fallbackValue),
+                new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms))
+            ]);
+        }
 
         try {
             activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
@@ -101,23 +129,10 @@
             if (banner) banner.classList.remove("hide");
         });
 
-        function withTimeout(promise, ms = 1100, fallbackValue = null) {
-            return Promise.race([
-                promise.catch(() => fallbackValue),
-                new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms))
-            ]);
-        }
-
         async function applyDynamicSalonPwa(salonSlug) {
+            window.__dismissSplashNow(true);
             const targetSlug = normalizeSlugSafe(salonSlug);
-            if (!targetSlug) {
-                hideSplashScreen(true);
-                return;
-            }
-            if (pwaAppliedForSlug === targetSlug) {
-                hideSplashScreen(false);
-                return;
-            }
+            if (!targetSlug || pwaAppliedForSlug === targetSlug) return;
             pwaAppliedForSlug = targetSlug;
 
             if ("serviceWorker" in navigator) {
@@ -126,16 +141,14 @@
 
             let appName = "Salon App";
             let logoUrl = "";
-            let splashUrl = "";
 
             try {
-                const snap = await withTimeout(getDoc(getSalonDocRef(targetSlug)), 1100, null);
+                const snap = await withTimeout(getDoc(getSalonDocRef(targetSlug)), 1000, null);
                 if (snap && snap.exists && snap.exists()) {
                     const data = snap.data() || {};
                     const pwa = data.pwaConfig || {};
                     appName = pwa.appName || data.salonName || appName;
                     logoUrl = pwa.logoUrl || "";
-                    splashUrl = pwa.splashUrl || logoUrl || "";
                 }
             } catch (_) {}
 
@@ -150,16 +163,6 @@
                 cardLogoImg.src = logoUrl;
                 cardLogoImg.classList.remove("hide");
                 if (cardLogoIcon) cardLogoIcon.classList.add("hide");
-            }
-
-            const activeSplashAsset = splashUrl || logoUrl;
-            const splashImg = document.getElementById("splashImageEl");
-            if (activeSplashAsset && splashImg) {
-                splashImg.src = activeSplashAsset;
-                splashImg.classList.remove("hide");
-                hideSplashScreen(false);
-            } else {
-                hideSplashScreen(true);
             }
 
             const bannerName = document.getElementById("bannerAppName");
@@ -225,10 +228,6 @@
             }
         }
 
-        function normalizeSlugSafe(slug) {
-            return String(slug || "").trim().toLowerCase();
-        }
-
         async function getResolvedSalonSlug() {
             let immediateSlug = DEFAULT_SALON_SLUG;
             try {
@@ -236,19 +235,18 @@
             } catch (_) {}
 
             activeSalonId = immediateSlug;
-            await applyDynamicSalonPwa(immediateSlug);
+            applyDynamicSalonPwa(immediateSlug);
 
             const canonical = await withTimeout(
                 resolveCanonicalSalonId(immediateSlug, { persist: true }),
-                1100,
+                900,
                 immediateSlug
             );
             if (canonical && canonical !== activeSalonId) {
                 activeSalonId = canonical;
-                await applyDynamicSalonPwa(canonical);
+                applyDynamicSalonPwa(canonical);
             }
 
-            hideSplashScreen(false);
             return activeSalonId || DEFAULT_SALON_SLUG;
         }
 
@@ -278,46 +276,18 @@
 
         try {
             onAuthStateChanged(auth, async (user) => {
+                window.__dismissSplashNow(true);
                 try {
                     if (user) {
                         await redirectToHomeIfAuthenticated(user);
                     } else {
                         await getResolvedSalonSlug();
                     }
-                } catch (_) {
-                    hideSplashScreen(true);
-                }
+                } catch (_) {}
             });
-        } catch (_) {
-            hideSplashScreen(true);
-        }
-
-        window.switchAuthView = function(view) {
-            const loginF = document.getElementById("loginForm");
-            const regF = document.getElementById("registerForm");
-            const title = document.getElementById("screenTitle");
-            const subtitle = document.getElementById("screenSubtitle");
-            const errorBox = document.getElementById("authError");
-
-            loginF.classList.add("hide");
-            regF.classList.add("hide");
-            errorBox.classList.add("hide");
-
-            if (view === "login") {
-                loginF.classList.remove("hide");
-                title.innerText = "Welcome Back";
-                subtitle.innerText = "Login to your user account";
-            } else if (view === "register") {
-                regF.classList.remove("hide");
-                title.innerText = "Create Account";
-                subtitle.innerText = "Sign up for new booking experience";
-            }
-        };
-
-        function showError(msg) {
-            const errorBox = document.getElementById("authError");
-            errorBox.innerText = msg;
-            errorBox.classList.remove("hide");
+        } catch (err) {
+            window.__dismissSplashNow(true);
+            console.error("Auth listener init error:", err);
         }
 
         async function syncCustomerToSalon(user, name, email, salonSlug) {
@@ -336,103 +306,142 @@
             ).catch((err) => console.warn("Customer sync warning:", err));
         }
 
-        document.getElementById("loginForm").addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const submitBtn = e.target.querySelector('button[type="submit"]');
-            const origHtml = submitBtn.innerHTML;
+        function bindAuthForms() {
+            const loginForm = document.getElementById("loginForm");
+            const registerForm = document.getElementById("registerForm");
 
-            const salonSlug = await getResolvedSalonSlug();
-            const email = document.getElementById("loginEmail").value.trim().toLowerCase();
-            const pass = document.getElementById("loginPass").value;
+            if (loginForm && !loginForm.dataset.bound) {
+                loginForm.dataset.bound = "1";
+                loginForm.addEventListener("submit", async (e) => {
+                    e.preventDefault();
+                    window.__clearAuthError();
 
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Logging in...`;
+                    const submitBtn = loginForm.querySelector('button[type="submit"]');
+                    const origHtml = submitBtn ? submitBtn.innerHTML : "Login";
 
-            try {
-                isRedirecting = true;
-                const userCredential = await signInWithEmailAndPassword(auth, email, pass);
-                const resolvedName = userCredential.user.displayName || email.split("@")[0];
-                sessionStorage.setItem("salonCustomerName", resolvedName);
-                sessionStorage.setItem("salonCustomerEmail", email);
-                sessionStorage.setItem("activeSalonId", salonSlug);
+                    const email = (document.getElementById("loginEmail")?.value || "").trim().toLowerCase();
+                    const pass = document.getElementById("loginPass")?.value || "";
 
-                await Promise.race([
-                    syncCustomerToSalon(userCredential.user, resolvedName, email, salonSlug),
-                    new Promise((resolve) => setTimeout(resolve, 2000))
-                ]);
+                    if (!email || !pass) {
+                        window.__showAuthError("⚠️ Kripya Email ID aur Password bharein.");
+                        return;
+                    }
 
-                window.location.replace(getPostAuthRedirectUrl(salonSlug));
-            } catch (error) {
-                isRedirecting = false;
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = origHtml;
-                console.error(error.code);
-                if (error.code === "auth/user-not-found" || error.code === "auth/invalid-credential" || error.code === "auth/invalid-email") {
-                    showError("⚠️ Is email se account nahi bana hai! Kripya pehle Register karein.");
-                } else if (error.code === "auth/wrong-password") {
-                    showError("⚠️ Wrong Password! Password galat hai.");
-                } else {
-                    showError("⚠️ Login Failed: " + (error?.message || "Please try again."));
-                }
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Logging in...`;
+                    }
+
+                    try {
+                        const salonSlug = await getResolvedSalonSlug();
+                        isRedirecting = true;
+                        const userCredential = await signInWithEmailAndPassword(auth, email, pass);
+                        const resolvedName = userCredential.user.displayName || email.split("@")[0];
+                        sessionStorage.setItem("salonCustomerName", resolvedName);
+                        sessionStorage.setItem("salonCustomerEmail", email);
+                        sessionStorage.setItem("activeSalonId", salonSlug);
+
+                        await Promise.race([
+                            syncCustomerToSalon(userCredential.user, resolvedName, email, salonSlug),
+                            new Promise((resolve) => setTimeout(resolve, 1500))
+                        ]);
+
+                        window.location.replace(getPostAuthRedirectUrl(salonSlug));
+                    } catch (error) {
+                        isRedirecting = false;
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.innerHTML = origHtml;
+                        }
+                        console.error("Login error:", error?.code || error);
+                        if (error?.code === "auth/user-not-found" || error?.code === "auth/invalid-credential" || error?.code === "auth/invalid-email") {
+                            window.__showAuthError("⚠️ Is email se account nahi bana hai! Kripya pehle Register karein.");
+                        } else if (error?.code === "auth/wrong-password") {
+                            window.__showAuthError("⚠️ Wrong Password! Password galat hai.");
+                        } else {
+                            window.__showAuthError("⚠️ Login Failed: " + (error?.message || "Please try again."));
+                        }
+                    }
+                });
             }
-        });
 
-        document.getElementById("registerForm").addEventListener("submit", async (e) => {
-            e.preventDefault();
-            const submitBtn = e.target.querySelector('button[type="submit"]');
-            const origHtml = submitBtn.innerHTML;
+            if (registerForm && !registerForm.dataset.bound) {
+                registerForm.dataset.bound = "1";
+                registerForm.addEventListener("submit", async (e) => {
+                    e.preventDefault();
+                    window.__clearAuthError();
 
-            const salonSlug = await getResolvedSalonSlug();
-            const name = document.getElementById("regName").value.trim();
-            const email = document.getElementById("regEmail").value.trim().toLowerCase();
-            const pass = document.getElementById("regPass").value;
+                    const submitBtn = registerForm.querySelector('button[type="submit"]');
+                    const origHtml = submitBtn ? submitBtn.innerHTML : "Register Account";
 
-            if (pass.length < 6) {
-                showError("⚠️ Password kam se kam 6 characters ka hona chahiye!");
-                return;
+                    const name = (document.getElementById("regName")?.value || "").trim();
+                    const email = (document.getElementById("regEmail")?.value || "").trim().toLowerCase();
+                    const pass = document.getElementById("regPass")?.value || "";
+
+                    if (!name || !email) {
+                        window.__showAuthError("⚠️ Kripya Full Name aur Email ID bharein.");
+                        return;
+                    }
+
+                    if (pass.length < 6) {
+                        window.__showAuthError("⚠️ Password kam se kam 6 characters ka hona chahiye!");
+                        return;
+                    }
+
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Registering...`;
+                    }
+
+                    try {
+                        const salonSlug = await getResolvedSalonSlug();
+                        isRedirecting = true;
+                        const cred = await createUserWithEmailAndPassword(auth, email, pass);
+                        if (name) {
+                            await updateProfile(cred.user, { displayName: name }).catch(() => {});
+                        }
+
+                        const resolvedName = name || email.split("@")[0];
+                        sessionStorage.setItem("salonCustomerName", resolvedName);
+                        sessionStorage.setItem("salonCustomerEmail", email);
+                        sessionStorage.setItem("activeSalonId", salonSlug);
+
+                        await Promise.race([
+                            syncCustomerToSalon(cred.user, resolvedName, email, salonSlug),
+                            new Promise((resolve) => setTimeout(resolve, 1500))
+                        ]);
+
+                        window.location.replace(getPostAuthRedirectUrl(salonSlug));
+                    } catch (error) {
+                        isRedirecting = false;
+                        if (submitBtn) {
+                            submitBtn.disabled = false;
+                            submitBtn.innerHTML = origHtml;
+                        }
+                        console.error("Register error:", error?.code || error);
+                        if (error?.code === "auth/email-already-in-use") {
+                            window.__showAuthError("⚠️ Already Account exists with this email! Kripya Login karein.");
+                        } else if (error?.code === "auth/invalid-email") {
+                            window.__showAuthError("⚠️ Wrong Email ID format!");
+                        } else {
+                            window.__showAuthError("⚠️ Registration Failed: " + (error?.message || "Please try again."));
+                        }
+                    }
+                });
             }
+        }
 
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin mr-1"></i> Registering...`;
-
-            try {
-                isRedirecting = true;
-                const cred = await createUserWithEmailAndPassword(auth, email, pass);
-                if (name) {
-                    await updateProfile(cred.user, { displayName: name }).catch(() => {});
-                }
-
-                const resolvedName = name || email.split("@")[0];
-                sessionStorage.setItem("salonCustomerName", resolvedName);
-                sessionStorage.setItem("salonCustomerEmail", email);
-                sessionStorage.setItem("activeSalonId", salonSlug);
-
-                await Promise.race([
-                    syncCustomerToSalon(cred.user, resolvedName, email, salonSlug),
-                    new Promise((resolve) => setTimeout(resolve, 2000))
-                ]);
-
-                window.location.replace(getPostAuthRedirectUrl(salonSlug));
-            } catch (error) {
-                isRedirecting = false;
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = origHtml;
-                console.error(error.code);
-                if (error.code === "auth/email-already-in-use") {
-                    showError("⚠️ Already Account exists with this email! Kripya Login karein.");
-                } else if (error.code === "auth/invalid-email") {
-                    showError("⚠️ Wrong Email ID format!");
-                } else {
-                    showError("⚠️ Registration Failed: " + (error?.message || "Please try again."));
-                }
-            }
-        });
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", bindAuthForms);
+        } else {
+            bindAuthForms();
+        }
     </script>
 </head>
 <body class="bg-gradient-to-br from-indigo-600 to-purple-800 min-h-screen flex items-center justify-center p-4 font-sans text-gray-800">
 
-    <!-- Dynamic Logo/Splash Overlay (Quick Auto-Dismiss) -->
-    <div id="salonSplashScreen" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white transition-opacity duration-200 p-6 text-center">
+    <!-- Dynamic Logo/Splash Overlay -->
+    <div id="salonSplashScreen" style="display:none !important; pointer-events:none;" class="hide fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white transition-opacity duration-200 p-6 text-center">
         <img id="splashImageEl" src="" alt="App Logo" class="hide max-h-56 max-w-xs rounded-3xl object-contain shadow-2xl">
     </div>
 
