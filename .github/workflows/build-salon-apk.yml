@@ -19,9 +19,22 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          build-tools: 34.0.0
+
+      - name: Accept Android SDK Licenses
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          mkdir -p "$ANDROID_HOME/licenses"
+          printf "8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5fe056a056d0f5aa4e7ec62df9fe2666622e\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$ANDROID_HOME/licenses/android-sdk-license"
+          printf "84831b9409646a918e30573bab4c9c91346d8abd\n504667f4c0de7af1a06de9f4b1727b84351f2910" > "$ANDROID_HOME/licenses/android-sdk-preview-license"
+          printf "d975f751698a77b662f1254ddbe6f345d6ce1a32" > "$ANDROID_HOME/licenses/google-gdk-license"
+          printf "601085b94cd77f0b54ff86406957099ebe79c4d6" > "$ANDROID_HOME/licenses/android-googletv-license"
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.4"
 
@@ -32,14 +45,15 @@ jobs:
           APP_NAME: ${{ github.event.client_payload.appName }}
           SALON_ID: ${{ github.event.client_payload.salonId }}
           USER_APP_URL: ${{ github.event.client_payload.userAppUrl }}
-          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_VAR_ID: ${{ vars.FIREBASE_PROJECT_ID }}
+          FIREBASE_SECRET_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
         run: |
           import os, base64, re, struct, zlib, urllib.request, json
 
           app_name = (os.environ.get("APP_NAME") or "Salon App").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
           user_url = (os.environ.get("USER_APP_URL") or "https://example.com").replace("&", "&amp;")
           salon_id = (os.environ.get("SALON_ID") or "").strip()
-          project_id = (os.environ.get("FIREBASE_PROJECT_ID") or "").strip()
+          project_id = (os.environ.get("FIREBASE_VAR_ID") or os.environ.get("FIREBASE_SECRET_ID") or "").strip()
 
           strings_path = "app/src/main/res/values/strings.xml"
           with open(strings_path, "r", encoding="utf-8") as f:
