@@ -29,10 +29,42 @@
             getCustomerDocRef
         } from "./tenant.js";
 
-        let activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG });
+        let activeSalonId = "";
         let isRedirecting = false;
         let deferredInstallPrompt = null;
         let pwaAppliedForSlug = "";
+        let splashDismissed = false;
+
+        function hideSplashScreen(immediate = false) {
+            if (splashDismissed) return;
+            splashDismissed = true;
+
+            const splash = document.getElementById("salonSplashScreen");
+            if (!splash) return;
+
+            splash.style.pointerEvents = "none";
+
+            if (immediate) {
+                splash.classList.add("hide");
+                splash.remove();
+                return;
+            }
+
+            splash.style.opacity = "0";
+            setTimeout(() => {
+                splash.classList.add("hide");
+                splash.remove();
+            }, 350);
+        }
+
+        // Hard safety timeout: splash screen kabhi bhi 2500ms se zyada nahi rukegi
+        setTimeout(() => hideSplashScreen(false), 2500);
+
+        try {
+            activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
+        } catch (_) {
+            activeSalonId = DEFAULT_SALON_SLUG;
+        }
 
         window.addEventListener("beforeinstallprompt", (e) => {
             e.preventDefault();
@@ -41,19 +73,21 @@
             if (banner) banner.classList.remove("hide");
         });
 
-        function hideSplashScreen() {
-            const splash = document.getElementById("salonSplashScreen");
-            if (!splash) return;
-            setTimeout(() => {
-                splash.style.opacity = "0";
-                setTimeout(() => splash.classList.add("hide"), 450);
-            }, 650);
+        function withTimeout(promise, ms = 2000, fallbackValue = null) {
+            return Promise.race([
+                promise.catch(() => fallbackValue),
+                new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms))
+            ]);
         }
 
         async function applyDynamicSalonPwa(salonSlug) {
             const targetSlug = normalizeSlugSafe(salonSlug);
-            if (!targetSlug || pwaAppliedForSlug === targetSlug) {
-                hideSplashScreen();
+            if (!targetSlug) {
+                hideSplashScreen(false);
+                return;
+            }
+            if (pwaAppliedForSlug === targetSlug) {
+                hideSplashScreen(false);
                 return;
             }
             pwaAppliedForSlug = targetSlug;
@@ -67,8 +101,8 @@
             let splashUrl = "";
 
             try {
-                const snap = await getDoc(getSalonDocRef(targetSlug));
-                if (snap.exists()) {
+                const snap = await withTimeout(getDoc(getSalonDocRef(targetSlug)), 2000, null);
+                if (snap && snap.exists && snap.exists()) {
                     const data = snap.data() || {};
                     const pwa = data.pwaConfig || {};
                     appName = pwa.appName || data.salonName || appName;
@@ -105,27 +139,29 @@
                 if (appleIconLink) appleIconLink.href = logoUrl;
             }
 
-            const startUrl = new URL(window.location.href);
-            startUrl.searchParams.set("salon", targetSlug);
+            try {
+                const startUrl = new URL(window.location.href);
+                startUrl.searchParams.set("salon", targetSlug);
 
-            const manifestObj = {
-                name: appName,
-                short_name: appName.slice(0, 12),
-                start_url: startUrl.pathname + startUrl.search,
-                scope: "./",
-                display: "standalone",
-                background_color: "#020617",
-                icons: logoUrl
-                    ? [
-                        { src: logoUrl, sizes: "192x192", type: "image/jpeg" },
-                        { src: logoUrl, sizes: "512x512", type: "image/jpeg" }
-                    ]
-                    : []
-            };
+                const manifestObj = {
+                    name: appName,
+                    short_name: appName.slice(0, 12),
+                    start_url: startUrl.pathname + startUrl.search,
+                    scope: "./",
+                    display: "standalone",
+                    background_color: "#020617",
+                    icons: logoUrl
+                        ? [
+                            { src: logoUrl, sizes: "192x192", type: "image/jpeg" },
+                            { src: logoUrl, sizes: "512x512", type: "image/jpeg" }
+                        ]
+                        : []
+                };
 
-            const manifestBlob = new Blob([JSON.stringify(manifestObj)], { type: "application/manifest+json" });
-            const manifestLink = document.getElementById("dynamicManifestLink");
-            if (manifestLink) manifestLink.href = URL.createObjectURL(manifestBlob);
+                const manifestBlob = new Blob([JSON.stringify(manifestObj)], { type: "application/manifest+json" });
+                const manifestLink = document.getElementById("dynamicManifestLink");
+                if (manifestLink) manifestLink.href = URL.createObjectURL(manifestBlob);
+            } catch (_) {}
 
             const installBtn = document.getElementById("installAppBtn");
             const banner = document.getElementById("installAppBanner");
@@ -150,7 +186,7 @@
                 });
             }
 
-            hideSplashScreen();
+            hideSplashScreen(false);
         }
 
         function normalizeSlugSafe(slug) {
@@ -158,21 +194,25 @@
         }
 
         async function getResolvedSalonSlug() {
-            const immediateSlug = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
+            let immediateSlug = DEFAULT_SALON_SLUG;
+            try {
+                immediateSlug = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
+            } catch (_) {}
+
             activeSalonId = immediateSlug;
             await applyDynamicSalonPwa(immediateSlug);
 
-            try {
-                const canonical = await Promise.race([
-                    resolveCanonicalSalonId(immediateSlug, { persist: true }),
-                    new Promise((resolve) => setTimeout(() => resolve(immediateSlug), 2000))
-                ]);
-                if (canonical) {
-                    activeSalonId = canonical;
-                    await applyDynamicSalonPwa(canonical);
-                }
-            } catch (_) {}
+            const canonical = await withTimeout(
+                resolveCanonicalSalonId(immediateSlug, { persist: true }),
+                2000,
+                immediateSlug
+            );
+            if (canonical && canonical !== activeSalonId) {
+                activeSalonId = canonical;
+                await applyDynamicSalonPwa(canonical);
+            }
 
+            hideSplashScreen(false);
             return activeSalonId || DEFAULT_SALON_SLUG;
         }
 
@@ -200,13 +240,17 @@
             window.location.replace(getPostAuthRedirectUrl(slug));
         }
 
-        onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                await redirectToHomeIfAuthenticated(user);
-            } else {
-                await getResolvedSalonSlug();
-            }
-        });
+        try {
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    await redirectToHomeIfAuthenticated(user);
+                } else {
+                    await getResolvedSalonSlug();
+                }
+            });
+        } catch (_) {
+            hideSplashScreen(false);
+        }
 
         window.switchAuthView = function(view) {
             const loginF = document.getElementById("loginForm");
@@ -348,7 +392,7 @@
 <body class="bg-gradient-to-br from-indigo-600 to-purple-800 min-h-screen flex items-center justify-center p-4 font-sans text-gray-800">
 
     <!-- Dynamic Splash Screen -->
-    <div id="salonSplashScreen" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white transition-opacity duration-500 p-6 text-center">
+    <div id="salonSplashScreen" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white transition-opacity duration-300 p-6 text-center">
         <img id="splashImageEl" src="" alt="Splash Screen" class="hide max-h-64 max-w-xs rounded-3xl object-contain shadow-2xl mb-4">
         <h2 id="splashAppTitle" class="text-xl font-extrabold tracking-wide">Salon App</h2>
         <p class="text-xs text-slate-400 mt-1">Loading your salon experience...</p>
