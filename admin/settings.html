@@ -13,8 +13,6 @@
         import { onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { auth, normalizeSalonId, verifyAdminSalonAccess, getSalonDocRef } from "./tenant.js";
 
-        // Apna deploy kiya hua Cloudflare Worker URL yahan daalein:
-        // Example: "https://salon-apk-builder.chandutechstudio.workers.dev"
         const APK_WORKER_URL = "https://salon-apk-builder.chandutechstudio.workers.dev";
 
         let activeSalonSlug = "";
@@ -199,13 +197,6 @@
                 return;
             }
 
-            if (!APK_WORKER_URL || APK_WORKER_URL.includes("YOUR-SUBDOMAIN")) {
-                statusEl.textContent = "settings.html mein APK_WORKER_URL ko apne Cloudflare Worker URL se update karein.";
-                statusEl.className = "text-xs font-semibold text-rose-600 mt-2";
-                statusEl.classList.remove("hide");
-                return;
-            }
-
             const userAppUrl = getUserAppUrl(activeSalonSlug);
 
             buildBtn.disabled = true;
@@ -231,9 +222,7 @@
                     body: JSON.stringify({
                         salonId: activeSalonSlug,
                         appName,
-                        userAppUrl,
-                        logoUrl: uploadedLogoDataUrl || "",
-                        splashUrl: finalSplashUrl || ""
+                        userAppUrl
                     })
                 });
 
