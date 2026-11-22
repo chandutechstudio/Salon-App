@@ -139,35 +139,40 @@ jobs:
               s_content = f.read()
 
           if "pluginManagement" not in s_content:
-              pm_block = """pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-    plugins {
-        id 'com.android.application' version '8.3.2' apply false
-    }
-}
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-"""
-              s_content = pm_block + "\n" + s_content
+              pm_lines = [
+                  "pluginManagement {",
+                  "    repositories {",
+                  "        google()",
+                  "        mavenCentral()",
+                  "        gradlePluginPortal()",
+                  "    }",
+                  "    plugins {",
+                  "        id 'com.android.application' version '8.3.2' apply false",
+                  "    }",
+                  "}",
+                  "dependencyResolutionManagement {",
+                  "    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)",
+                  "    repositories {",
+                  "        google()",
+                  "        mavenCentral()",
+                  "    }",
+                  "}",
+                  ""
+              ]
+              s_content = "\n".join(pm_lines) + "\n" + s_content
               with open(settings_path, "w", encoding="utf-8") as f:
                   f.write(s_content)
 
           root_gradle = "build.gradle"
           if not os.path.exists(root_gradle):
+              rg_lines = [
+                  "plugins {",
+                  "    id 'com.android.application' version '8.3.2' apply false",
+                  "}",
+                  ""
+              ]
               with open(root_gradle, "w", encoding="utf-8") as f:
-                  f.write("""plugins {
-    id 'com.android.application' version '8.3.2' apply false
-}
-""")
+                  f.write("\n".join(rg_lines))
           EOF
 
       - name: Build Debug APK
