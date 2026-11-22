@@ -11,6 +11,52 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>.hide { display: none !important; }</style>
 
+    <script>
+        window.__dismissSplashNow = function(immediate) {
+            try {
+                if (window.__splashDismissed) return;
+                window.__splashDismissed = true;
+
+                var splash = document.getElementById("salonSplashScreen");
+                if (!splash) return;
+
+                splash.style.pointerEvents = "none";
+                if (immediate) {
+                    splash.style.setProperty("display", "none", "important");
+                    if (splash.parentNode) splash.parentNode.removeChild(splash);
+                    return;
+                }
+
+                splash.style.opacity = "0";
+                setTimeout(function() {
+                    var el = document.getElementById("salonSplashScreen");
+                    if (el) {
+                        el.style.setProperty("display", "none", "important");
+                        if (el.parentNode) el.parentNode.removeChild(el);
+                    }
+                }, 300);
+            } catch (_) {}
+        };
+
+        setTimeout(function() {
+            if (typeof window.__dismissSplashNow === "function") {
+                window.__dismissSplashNow(false);
+            }
+        }, 1500);
+
+        window.addEventListener("error", function() {
+            if (typeof window.__dismissSplashNow === "function") {
+                window.__dismissSplashNow(true);
+            }
+        });
+
+        window.addEventListener("unhandledrejection", function() {
+            if (typeof window.__dismissSplashNow === "function") {
+                window.__dismissSplashNow(true);
+            }
+        });
+    </script>
+
     <script type="module">
         import {
             onAuthStateChanged,
@@ -33,28 +79,11 @@
         let isRedirecting = false;
         let deferredInstallPrompt = null;
         let pwaAppliedForSlug = "";
-        let splashDismissed = false;
 
         function hideSplashScreen(immediate = false) {
-            if (splashDismissed) return;
-            splashDismissed = true;
-
-            const splash = document.getElementById("salonSplashScreen");
-            if (!splash) return;
-
-            splash.style.pointerEvents = "none";
-
-            if (immediate) {
-                splash.classList.add("hide");
-                splash.remove();
-                return;
+            if (typeof window.__dismissSplashNow === "function") {
+                window.__dismissSplashNow(immediate);
             }
-
-            splash.style.opacity = "0";
-            setTimeout(() => {
-                splash.classList.add("hide");
-                splash.remove();
-            }, 350);
         }
 
         // Hard safety timeout: splash screen kabhi bhi 2500ms se zyada nahi rukegi
@@ -242,10 +271,14 @@
 
         try {
             onAuthStateChanged(auth, async (user) => {
-                if (user) {
-                    await redirectToHomeIfAuthenticated(user);
-                } else {
-                    await getResolvedSalonSlug();
+                try {
+                    if (user) {
+                        await redirectToHomeIfAuthenticated(user);
+                    } else {
+                        await getResolvedSalonSlug();
+                    }
+                } catch (_) {
+                    hideSplashScreen(false);
                 }
             });
         } catch (_) {
