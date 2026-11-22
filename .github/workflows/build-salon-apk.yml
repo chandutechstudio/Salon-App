@@ -1,129 +1,4 @@
-name: Build Custom Salon APK
-
-on:
-  repository_dispatch:
-    types: [build-salon-apk]
-  workflow_dispatch:
-
-jobs:
-  build-apk:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Setup Android SDK
-        shell: bash
-        run: |
-          set -e
-          ANDROID_SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-
-          if [ ! -d "$ANDROID_SDK_ROOT/cmdline-tools/latest" ]; then
-            curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
-            unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools_extract
-            mv /tmp/cmdtools_extract/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-            rm -rf /tmp/cmdtools.zip /tmp/cmdtools_extract
-          fi
-
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null 2>&1 || true
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$ANDROID_SDK_ROOT" \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
-
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.4"
-
-      - name: Inject Salon App Name, URL & Icons
-        working-directory: android-builder
-        shell: bash
-        env:
-          APP_NAME: ${{ github.event.client_payload.appName }}
-          SALON_ID: ${{ github.event.client_payload.salonId }}
-          USER_APP_URL: ${{ github.event.client_payload.userAppUrl }}
-          FIREBASE_VAR_ID: ${{ vars.FIREBASE_PROJECT_ID }}
-          FIREBASE_SECRET_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
-        run: |
-          python3 - << 'EOF'
-          import os, base64, re, struct, zlib, urllib.request, json
-
-          app_name = (os.environ.get("APP_NAME") or "Salon App").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-          user_url = (os.environ.get("USER_APP_URL") or "https://example.com").replace("&", "&amp;")
-          salon_id = (os.environ.get("SALON_ID") or "").strip()
-          project_id = (os.environ.get("FIREBASE_VAR_ID") or os.environ.get("FIREBASE_SECRET_ID") or "").strip()
-
-          strings_path = "app/src/main/res/values/strings.xml"
-          with open(strings_path, "r", encoding="utf-8") as f:
-              content = f.read()
-
-          content = re.sub(r'<string name="app_name">.*?</string>', f'<string name="app_name">{app_name}</string>', content, flags=re.S)
-          if '<string name="target_url">' in content:
-              content = re.sub(r'<string name="target_url">.*?</string>', f'<string name="target_url">{user_url}</string>', content, flags=re.S)
-          else:
-              content = content.replace("</resources>", f'    <string name="target_url">{user_url}</string>\n</resources>')
-
-          with open(strings_path, "w", encoding="utf-8") as f:
-              f.write(content)
-
-          logo_data_url = ""
-          splash_data_url = ""
-
-          if project_id and salon_id:
-              doc_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/salons/{salon_id}"
-              try:
-                  with urllib.request.urlopen(doc_url, timeout=20) as resp:
-                      doc = json.loads(resp.read().decode("utf-8"))
-                  pwa_fields = doc.get("fields", {}).get("pwaConfig", {}).get("mapValue", {}).get("fields", {})
-                  logo_data_url = pwa_fields.get("logoUrl", {}).get("stringValue", "")
-                  splash_data_url = pwa_fields.get("splashUrl", {}).get("stringValue", "")
-              except Exception as ex:
-                  print("Firestore fetch note:", ex)
-
-          def make_fallback_png(out_path):
-              os.makedirs(os.path.dirname(out_path), exist_ok=True)
-              w, h = 64, 64
-              raw = b"".join(b"\x00" + b"\x4f\x46\xe5\xff" * w for _ in range(h))
-              def chunk(tag, data):
-                  return struct.pack("!I", len(data)) + tag + data + struct.pack("!I", zlib.crc32(tag + data) & 0xffffffff)
-              png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!IIBBBBB", w, h, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
-              with open(out_path, "wb") as f:
-                  f.write(png)
-
-          def save_data_url(data_url, out_path):
-              if not data_url or "," not in data_url:
-                  return False
-              b64 = data_url.split(",", 1)[1]
-              raw = base64.b64decode(b64)
-              os.makedirs(os.path.dirname(out_path), exist_ok=True)
-              with open(out_path, "wb") as img_f:
-                  img_f.write(raw)
-              return True
-
-          if not save_data_url(logo_data_url, "app/src/main/res/drawable/salon_logo.jpg"):
-              make_fallback_png("app/src/main/res/drawable/salon_logo.png")
-
-          if not save_data_url(splash_data_url, "app/src/main/res/drawable/salon_splash.jpg"):
-              if os.path.exists("app/src/main/res/drawable/salon_logo.jpg"):
-                  with open("app/src/main/res/drawable/salon_logo.jpg", "rb") as src, open("app/src/main/res/drawable/salon_splash.jpg", "wb") as dst:
-                      dst.write(src.read())
-          EOF
-
-      - name: Ensure Android Gradle Plugin Repository
+- name: Ensure Android Gradle Plugin Repository
         working-directory: android-builder
         shell: bash
         run: |
@@ -173,17 +48,18 @@ jobs:
               ]
               with open(root_gradle, "w", encoding="utf-8") as f:
                   f.write("\n".join(rg_lines))
+
+          gp_path = "gradle.properties"
+          gp_content = ""
+          if os.path.exists(gp_path):
+              with open(gp_path, "r", encoding="utf-8") as f:
+                  gp_content = f.read()
+
+          if "android.useAndroidX=true" not in gp_content:
+              gp_content = gp_content.rstrip() + "\nandroid.useAndroidX=true\n"
+          if "android.enableJetifier=true" not in gp_content:
+              gp_content = gp_content.rstrip() + "\nandroid.enableJetifier=true\n"
+
+          with open(gp_path, "w", encoding="utf-8") as f:
+              f.write(gp_content.lstrip())
           EOF
-
-      - name: Build Debug APK
-        working-directory: android-builder
-        run: gradle assembleDebug
-
-      - name: Upload APK to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: apk-${{ github.event.client_payload.salonId }}-${{ github.event.client_payload.buildId }}
-          name: ${{ github.event.client_payload.appName }} (${{ github.event.client_payload.salonId }})
-          files: android-builder/app/build/outputs/apk/debug/app-debug.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
