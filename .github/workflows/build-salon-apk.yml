@@ -32,13 +32,14 @@ jobs:
           APP_NAME: ${{ github.event.client_payload.appName }}
           SALON_ID: ${{ github.event.client_payload.salonId }}
           USER_APP_URL: ${{ github.event.client_payload.userAppUrl }}
-          LOGO_DATA_URL: ${{ github.event.client_payload.logoUrl }}
-          SPLASH_DATA_URL: ${{ github.event.client_payload.splashUrl }}
+          FIREBASE_PROJECT_ID: ${{ vars.FIREBASE_PROJECT_ID || secrets.FIREBASE_PROJECT_ID }}
         run: |
-          import os, base64, re, struct, zlib
+          import os, base64, re, struct, zlib, urllib.request, json
 
           app_name = (os.environ.get("APP_NAME") or "Salon App").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
           user_url = (os.environ.get("USER_APP_URL") or "https://example.com").replace("&", "&amp;")
+          salon_id = (os.environ.get("SALON_ID") or "").strip()
+          project_id = (os.environ.get("FIREBASE_PROJECT_ID") or "").strip()
 
           strings_path = "app/src/main/res/values/strings.xml"
           with open(strings_path, "r", encoding="utf-8") as f:
@@ -52,6 +53,20 @@ jobs:
 
           with open(strings_path, "w", encoding="utf-8") as f:
               f.write(content)
+
+          logo_data_url = ""
+          splash_data_url = ""
+
+          if project_id and salon_id:
+              doc_url = f"https://firestore.googleapis.com/v1/projects/{project_id}/databases/(default)/documents/salons/{salon_id}"
+              try:
+                  with urllib.request.urlopen(doc_url, timeout=20) as resp:
+                      doc = json.loads(resp.read().decode("utf-8"))
+                  pwa_fields = doc.get("fields", {}).get("pwaConfig", {}).get("mapValue", {}).get("fields", {})
+                  logo_data_url = pwa_fields.get("logoUrl", {}).get("stringValue", "")
+                  splash_data_url = pwa_fields.get("splashUrl", {}).get("stringValue", "")
+              except Exception as ex:
+                  print("Firestore fetch note:", ex)
 
           def make_fallback_png(out_path):
               os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -73,10 +88,10 @@ jobs:
                   img_f.write(raw)
               return True
 
-          if not save_data_url(os.environ.get("LOGO_DATA_URL", ""), "app/src/main/res/drawable/salon_logo.jpg"):
+          if not save_data_url(logo_data_url, "app/src/main/res/drawable/salon_logo.jpg"):
               make_fallback_png("app/src/main/res/drawable/salon_logo.png")
 
-          if not save_data_url(os.environ.get("SPLASH_DATA_URL", ""), "app/src/main/res/drawable/salon_splash.jpg"):
+          if not save_data_url(splash_data_url, "app/src/main/res/drawable/salon_splash.jpg"):
               if os.path.exists("app/src/main/res/drawable/salon_logo.jpg"):
                   with open("app/src/main/res/drawable/salon_logo.jpg", "rb") as src, open("app/src/main/res/drawable/salon_splash.jpg", "wb") as dst:
                       dst.write(src.read())
