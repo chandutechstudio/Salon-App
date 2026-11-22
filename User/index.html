@@ -42,7 +42,7 @@
             if (typeof window.__dismissSplashNow === "function") {
                 window.__dismissSplashNow(false);
             }
-        }, 1200);
+        }, 1100);
 
         window.addEventListener("error", function() {
             if (typeof window.__dismissSplashNow === "function") {
@@ -86,7 +86,7 @@
             }
         }
 
-        setTimeout(() => hideSplashScreen(false), 1500);
+        setTimeout(() => hideSplashScreen(false), 1400);
 
         try {
             activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
@@ -101,7 +101,7 @@
             if (banner) banner.classList.remove("hide");
         });
 
-        function withTimeout(promise, ms = 1200, fallbackValue = null) {
+        function withTimeout(promise, ms = 1100, fallbackValue = null) {
             return Promise.race([
                 promise.catch(() => fallbackValue),
                 new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms))
@@ -129,7 +129,7 @@
             let splashUrl = "";
 
             try {
-                const snap = await withTimeout(getDoc(getSalonDocRef(targetSlug)), 1200, null);
+                const snap = await withTimeout(getDoc(getSalonDocRef(targetSlug)), 1100, null);
                 if (snap && snap.exists && snap.exists()) {
                     const data = snap.data() || {};
                     const pwa = data.pwaConfig || {};
@@ -143,6 +143,14 @@
 
             const cardTitleEl = document.getElementById("brandAppTitle");
             if (cardTitleEl) cardTitleEl.innerText = appName;
+
+            const cardLogoIcon = document.getElementById("brandLogoIcon");
+            const cardLogoImg = document.getElementById("brandLogoImg");
+            if (logoUrl && cardLogoImg) {
+                cardLogoImg.src = logoUrl;
+                cardLogoImg.classList.remove("hide");
+                if (cardLogoIcon) cardLogoIcon.classList.add("hide");
+            }
 
             const activeSplashAsset = splashUrl || logoUrl;
             const splashImg = document.getElementById("splashImageEl");
@@ -232,7 +240,7 @@
 
             const canonical = await withTimeout(
                 resolveCanonicalSalonId(immediateSlug, { persist: true }),
-                1200,
+                1100,
                 immediateSlug
             );
             if (canonical && canonical !== activeSalonId) {
@@ -444,8 +452,9 @@
 
     <div class="bg-white w-full max-w-md p-8 rounded-3xl shadow-2xl space-y-6">
         <div class="text-center">
-            <div class="bg-indigo-100 text-indigo-600 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl font-bold shadow-inner">
-                <i class="fa-solid fa-scissors"></i>
+            <div class="bg-indigo-100 text-indigo-600 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl font-bold shadow-inner overflow-hidden">
+                <i id="brandLogoIcon" class="fa-solid fa-scissors"></i>
+                <img id="brandLogoImg" src="" alt="Brand Logo" class="hide w-full h-full object-cover">
             </div>
             <p id="brandAppTitle" class="text-[11px] font-bold uppercase tracking-wider text-indigo-600 mb-0.5">Salon App</p>
             <h2 id="screenTitle" class="text-2xl font-bold text-gray-900">Welcome Back</h2>
