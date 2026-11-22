@@ -3,6 +3,7 @@ name: Build Custom Salon APK
 on:
   repository_dispatch:
     types: [build-salon-apk]
+  workflow_dispatch:
 
 jobs:
   build-apk:
