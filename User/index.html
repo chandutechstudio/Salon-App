@@ -34,7 +34,7 @@
                         el.style.setProperty("display", "none", "important");
                         if (el.parentNode) el.parentNode.removeChild(el);
                     }
-                }, 300);
+                }, 250);
             } catch (_) {}
         };
 
@@ -42,7 +42,7 @@
             if (typeof window.__dismissSplashNow === "function") {
                 window.__dismissSplashNow(false);
             }
-        }, 1500);
+        }, 1200);
 
         window.addEventListener("error", function() {
             if (typeof window.__dismissSplashNow === "function") {
@@ -86,8 +86,7 @@
             }
         }
 
-        // Hard safety timeout: splash screen kabhi bhi 2500ms se zyada nahi rukegi
-        setTimeout(() => hideSplashScreen(false), 2500);
+        setTimeout(() => hideSplashScreen(false), 1500);
 
         try {
             activeSalonId = resolveActiveSalonId({ persist: true, fallback: DEFAULT_SALON_SLUG }) || DEFAULT_SALON_SLUG;
@@ -102,7 +101,7 @@
             if (banner) banner.classList.remove("hide");
         });
 
-        function withTimeout(promise, ms = 2000, fallbackValue = null) {
+        function withTimeout(promise, ms = 1200, fallbackValue = null) {
             return Promise.race([
                 promise.catch(() => fallbackValue),
                 new Promise((resolve) => setTimeout(() => resolve(fallbackValue), ms))
@@ -112,7 +111,7 @@
         async function applyDynamicSalonPwa(salonSlug) {
             const targetSlug = normalizeSlugSafe(salonSlug);
             if (!targetSlug) {
-                hideSplashScreen(false);
+                hideSplashScreen(true);
                 return;
             }
             if (pwaAppliedForSlug === targetSlug) {
@@ -130,7 +129,7 @@
             let splashUrl = "";
 
             try {
-                const snap = await withTimeout(getDoc(getSalonDocRef(targetSlug)), 2000, null);
+                const snap = await withTimeout(getDoc(getSalonDocRef(targetSlug)), 1200, null);
                 if (snap && snap.exists && snap.exists()) {
                     const data = snap.data() || {};
                     const pwa = data.pwaConfig || {};
@@ -145,15 +144,14 @@
             const cardTitleEl = document.getElementById("brandAppTitle");
             if (cardTitleEl) cardTitleEl.innerText = appName;
 
+            const activeSplashAsset = splashUrl || logoUrl;
             const splashImg = document.getElementById("splashImageEl");
-            const splashFallback = document.getElementById("splashFallbackLogo");
-            const activeLogo = splashUrl || logoUrl;
-            if (activeLogo && splashImg) {
-                splashImg.src = activeLogo;
+            if (activeSplashAsset && splashImg) {
+                splashImg.src = activeSplashAsset;
                 splashImg.classList.remove("hide");
-                if (splashFallback) splashFallback.classList.add("hide");
-            } else if (splashFallback) {
-                splashFallback.classList.remove("hide");
+                hideSplashScreen(false);
+            } else {
+                hideSplashScreen(true);
             }
 
             const bannerName = document.getElementById("bannerAppName");
@@ -217,8 +215,6 @@
                     if (banner) banner.classList.add("hide");
                 });
             }
-
-            hideSplashScreen(false);
         }
 
         function normalizeSlugSafe(slug) {
@@ -236,7 +232,7 @@
 
             const canonical = await withTimeout(
                 resolveCanonicalSalonId(immediateSlug, { persist: true }),
-                2000,
+                1200,
                 immediateSlug
             );
             if (canonical && canonical !== activeSalonId) {
@@ -281,11 +277,11 @@
                         await getResolvedSalonSlug();
                     }
                 } catch (_) {
-                    hideSplashScreen(false);
+                    hideSplashScreen(true);
                 }
             });
         } catch (_) {
-            hideSplashScreen(false);
+            hideSplashScreen(true);
         }
 
         window.switchAuthView = function(view) {
@@ -427,12 +423,9 @@
 </head>
 <body class="bg-gradient-to-br from-indigo-600 to-purple-800 min-h-screen flex items-center justify-center p-4 font-sans text-gray-800">
 
-    <!-- Logo-Only Splash Screen -->
-    <div id="salonSplashScreen" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white transition-opacity duration-300 p-6 text-center">
+    <!-- Dynamic Logo/Splash Overlay (Quick Auto-Dismiss) -->
+    <div id="salonSplashScreen" class="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-950 text-white transition-opacity duration-200 p-6 text-center">
         <img id="splashImageEl" src="" alt="App Logo" class="hide max-h-56 max-w-xs rounded-3xl object-contain shadow-2xl">
-        <div id="splashFallbackLogo" class="bg-indigo-100 text-indigo-600 w-20 h-20 rounded-full flex items-center justify-center text-3xl font-bold shadow-2xl">
-            <i class="fa-solid fa-scissors"></i>
-        </div>
     </div>
 
     <!-- Install App Banner -->
