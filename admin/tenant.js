@@ -1,3 +1,4 @@
+// tenant.js - Multi-tenant salon helper for admin panel
 import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
 import { getFirestore, doc, collection, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
@@ -41,19 +42,21 @@ export function resolveActiveSalonId({ persist = true } = {}) {
 
     if (fromUrl) {
         if (persist) {
-            sessionStorage.setItem("activeSalonId", fromUrl);
+            try { sessionStorage.setItem("activeSalonId", fromUrl); } catch (_) {}
         }
         return fromUrl;
     }
 
-    const fromSession = normalizeSalonId(sessionStorage.getItem("activeSalonId"));
-    if (fromSession) return fromSession;
+    try {
+        const fromSession = normalizeSalonId(sessionStorage.getItem("activeSalonId"));
+        if (fromSession) return fromSession;
+    } catch (_) {}
 
     return "";
 }
 
 export function buildSalonUrl(pageName, salonId, extraParams = {}) {
-    const cleanId = normalizeSalonId(salonId);
+    const cleanId = normalizeSalonId(salonId) || resolveActiveSalonId({ persist: false });
     const url = new URL(pageName, window.location.href);
     if (cleanId) url.searchParams.set("salon", cleanId);
     Object.entries(extraParams).forEach(([key, value]) => {
@@ -166,10 +169,12 @@ export function requireAdminAuth(onAuthorized, { redirectTo = "index.html" } = {
             return;
         }
 
-        sessionStorage.setItem("activeSalonId", access.salonId);
-        if (user.email) {
-            sessionStorage.setItem("adminEmail", user.email.trim().toLowerCase());
-        }
+        try {
+            sessionStorage.setItem("activeSalonId", access.salonId);
+            if (user.email) {
+                sessionStorage.setItem("adminEmail", user.email.trim().toLowerCase());
+            }
+        } catch (_) {}
 
         if (typeof onAuthorized === "function") {
             await onAuthorized(user, access.salonId);
