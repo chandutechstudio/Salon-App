@@ -14,12 +14,16 @@
 
         let resolvedSalonSlug = "";
         let unsubscribers = [];
+        let latestCustomerDocsCount = null;
+        let latestBookingUsersCount = 0;
 
         function clearListeners() {
             unsubscribers.forEach((fn) => {
                 try { fn(); } catch (_) {}
             });
             unsubscribers = [];
+            latestCustomerDocsCount = null;
+            latestBookingUsersCount = 0;
         }
 
         function clearAdminSession() {
@@ -34,6 +38,15 @@
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#39;");
+        }
+
+        function syncTotalAppUsersStat() {
+            const totalUsersEl = document.getElementById("statTotalUsers");
+            if (!totalUsersEl) return;
+            const count = typeof latestCustomerDocsCount === "number"
+                ? Math.max(latestCustomerDocsCount, latestBookingUsersCount)
+                : latestBookingUsersCount;
+            totalUsersEl.innerText = count;
         }
 
         function getEmailSubscriptionDocRef(email) {
@@ -117,7 +130,8 @@
                 const b = docSnap.data();
                 const docId = escapeHtml(docSnap.id);
                 totalBookingsCount++;
-                uniqueUsers.add(b.userPhone || b.phone || b.userEmail || b.userId || "Customer");
+                const userKey = String(b.userId || b.userEmail || b.email || b.userPhone || b.phone || "").trim().toLowerCase();
+                if (userKey) uniqueUsers.add(userKey);
 
                 const status = b.status || "Pending";
                 if (status === "Pending" || status === "pending") {
@@ -162,7 +176,8 @@
                 `;
             });
 
-            document.getElementById("statTotalUsers").innerText = uniqueUsers.size;
+            latestBookingUsersCount = uniqueUsers.size;
+            syncTotalAppUsersStat();
             document.getElementById("statTotalEarnings").innerText = `₹${totalEarnings}`;
             document.getElementById("statCompleted").innerText = completedCount;
             document.getElementById("statPending").innerText = pendingCount;
@@ -212,6 +227,22 @@
             }
 
             await syncSubscriptionState();
+
+            unsubscribers.push(
+                onSnapshot(getSalonSubcollectionRef(salonId, "customers"), (customerSnap) => {
+                    const userKeys = new Set();
+                    customerSnap.forEach((cDoc) => {
+                        const cData = cDoc.data() || {};
+                        const key = String(cDoc.id || cData.uid || cData.email || "").trim().toLowerCase();
+                        if (key) userKeys.add(key);
+                    });
+                    latestCustomerDocsCount = userKeys.size;
+                    syncTotalAppUsersStat();
+                }, () => {
+                    latestCustomerDocsCount = null;
+                    syncTotalAppUsersStat();
+                })
+            );
 
             unsubscribers.push(
                 onSnapshot(getSalonSubcollectionRef(salonId, "bookings"), (querySnapshot) => {
@@ -345,11 +376,11 @@
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm space-y-1">
                 <div class="flex justify-between items-center text-gray-400">
-                    <span class="text-xs font-bold uppercase">Total Clients</span>
+                    <span class="text-xs font-bold uppercase">Total App Users</span>
                     <i class="fa-solid fa-users text-indigo-600 bg-indigo-50 p-2 rounded-xl"></i>
                 </div>
                 <h3 id="statTotalUsers" class="text-xl font-bold text-gray-900">0</h3>
-                <p class="text-[10px] text-green-600 font-semibold">Active registered clients</p>
+                <p class="text-[10px] text-green-600 font-semibold">Registered app users</p>
             </div>
 
             <div class="bg-white p-5 rounded-3xl border border-gray-100 shadow-sm space-y-1">
