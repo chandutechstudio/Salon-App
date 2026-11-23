@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Salon App - User Profile</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gray-100 font-sans text-gray-800 pb-24">
+
+    <header class="bg-white p-4 sticky top-0 z-40 border-b border-gray-100 flex items-center justify-between max-w-md mx-auto">
+        <div class="flex items-center gap-3">
+            <a href="home.html" class="text-gray-600 hover:text-indigo-600"><i class="fa-solid fa-arrow-left text-base"></i></a>
+            <h1 class="text-sm font-bold text-gray-800">My Profile</h1>
+        </div>
+        <button onclick="openEditModal()" class="text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer">
+            <i class="fa-solid fa-pen-to-square"></i> Edit
+        </button>
+    </header>
+
+    <main class="max-w-md mx-auto p-4 space-y-4">
+
+        <div class="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm text-center space-y-3 relative">
+            <div class="w-20 h-20 bg-gradient-to-tr from-indigo-600 to-purple-600 text-white rounded-full flex items-center justify-center text-3xl font-bold mx-auto shadow-md" id="profileInitial">C</div>
+
+            <div class="space-y-1">
+                <h3 id="profileName" class="text-base font-bold text-gray-900">Loading...</h3>
+                <p id="profilePhone" class="text-xs text-gray-500 font-medium flex items-center justify-center gap-1.5">
+                    <i class="fa-solid fa-phone text-indigo-500 text-[10px]"></i> Not set
+                </p>
+                <p id="profileEmail" class="text-xs text-gray-400 font-medium flex items-center justify-center gap-1.5">
+                    <i class="fa-solid fa-envelope text-indigo-400 text-[10px]"></i> Loading...
+                </p>
+            </div>
+
+            <div class="pt-1">
+                <span class="inline-flex items-center gap-1.5 text-[10px] font-semibold bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full">
+                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span> Cloud Synced Member
+                </span>
+            </div>
+        </div>
+
+        <div class="bg-gradient-to-r from-indigo-600 to-purple-600 p-5 rounded-3xl text-white shadow-md space-y-3">
+            <div class="flex items-center gap-3">
+                <div class="bg-white/20 p-2.5 rounded-2xl text-xl">
+                    <i class="fa-solid fa-share-nodes"></i>
+                </div>
+                <div>
+                    <h4 class="text-xs font-bold uppercase tracking-wider">Refer & Share App</h4>
+                    <p class="text-[11px] text-indigo-100 mt-0.5">Share with friends on WhatsApp, Insta, FB, Telegram...</p>
+                </div>
+            </div>
+            <button onclick="shareAppAnywhere()" class="w-full bg-white text-indigo-600 hover:bg-indigo-50 font-bold py-3 rounded-2xl transition text-xs shadow-sm flex items-center justify-center gap-2 cursor-pointer">
+                <i class="fa-solid fa-paper-plane"></i> Share App Link Now
+            </button>
+        </div>
+
+        <div class="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden divide-y divide-gray-100 text-xs">
+            <button onclick="openEditModal()" class="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition text-left cursor-pointer">
+                <span class="flex items-center gap-3 font-semibold text-gray-700"><i class="fa-solid fa-user-pen text-indigo-600 text-base w-5"></i> Edit Name & Mobile Number</span>
+                <i class="fa-solid fa-chevron-right text-gray-300"></i>
+            </button>
+
+            <button onclick="openPasswordModal()" class="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition text-left cursor-pointer">
+                <span class="flex items-center gap-3 font-semibold text-gray-700"><i class="fa-solid fa-lock text-indigo-600 text-base w-5"></i> Reset Password via Email</span>
+                <i class="fa-solid fa-chevron-right text-gray-300"></i>
+            </button>
+
+            <a href="status.html" class="flex items-center justify-between p-4 hover:bg-gray-50 transition">
+                <span class="flex items-center gap-3 font-semibold text-gray-700"><i class="fa-solid fa-calendar-check text-indigo-600 text-base w-5"></i> My Bookings & Status</span>
+                <i class="fa-solid fa-chevron-right text-gray-300"></i>
+            </a>
+
+            <a href="history.html" class="flex items-center justify-between p-4 hover:bg-gray-50 transition">
+                <span class="flex items-center gap-3 font-semibold text-gray-700"><i class="fa-solid fa-receipt text-indigo-600 text-base w-5"></i> Past Service History</span>
+                <i class="fa-solid fa-chevron-right text-gray-300"></i>
+            </a>
+
+            <div class="flex items-center justify-between p-4">
+                <span class="flex items-center gap-3 font-semibold text-gray-700"><i class="fa-solid fa-bell text-indigo-600 text-base w-5"></i> Push Notifications</span>
+                <input type="checkbox" id="notifToggle" onchange="saveNotifPref()" checked class="w-4 h-4 accent-indigo-600 cursor-pointer">
+            </div>
+
+            <a href="tel:9876543210" class="flex items-center justify-between p-4 hover:bg-gray-50 transition">
+                <span class="flex items-center gap-3 font-semibold text-gray-700"><i class="fa-solid fa-headset text-indigo-600 text-base w-5"></i> Salon Support & Help</span>
+                <i class="fa-solid fa-chevron-right text-gray-300"></i>
+            </a>
+        </div>
+
+        <button onclick="logout()" class="w-full bg-red-50 hover:bg-red-100 text-red-600 font-bold py-3.5 rounded-2xl transition text-xs shadow-sm flex items-center justify-center gap-2 cursor-pointer">
+            <i class="fa-solid fa-right-from-bracket"></i> Log Out from Account
+        </button>
+
+    </main>
+
+    <div id="editModal" class="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-6 space-y-4 shadow-xl">
+            <div class="flex items-center justify-between">
+                <h3 class="text-sm font-bold text-gray-900">Edit Profile Details</h3>
+                <button onclick="closeEditModal()" class="text-gray-400 hover:text-gray-600 cursor-pointer"><i class="fa-solid fa-xmark text-base"></i></button>
+            </div>
+
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase mb-1">Full Name</label>
+                    <input type="text" id="editNameInput" placeholder="Enter your full name" class="w-full px-3.5 py-2.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-600">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase mb-1">Mobile Number</label>
+                    <input type="tel" id="editPhoneInput" maxlength="10" placeholder="10-digit mobile number" class="w-full px-3.5 py-2.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-600">
+                </div>
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase mb-1">Email Address</label>
+                    <input type="email" id="editEmailInput" readonly class="w-full px-3.5 py-2.5 text-xs bg-gray-100 border border-gray-200 rounded-xl text-gray-500">
+                </div>
+            </div>
+
+            <div class="flex gap-2 pt-2">
+                <button onclick="closeEditModal()" class="w-1/2 py-2.5 rounded-xl text-xs font-bold text-gray-600 bg-gray-100 hover:bg-gray-200 transition cursor-pointer">Cancel</button>
+                <button onclick="saveProfileChanges()" class="w-1/2 py-2.5 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition cursor-pointer">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="passwordModal" class="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-6 space-y-4 shadow-xl">
+            <div class="flex items-center justify-between">
+                <h3 class="text-sm font-bold text-gray-900">Password Reset</h3>
+                <button onclick="closePasswordModal()" class="text-gray-400 hover:text-gray-600 cursor-pointer"><i class="fa-solid fa-xmark text-base"></i></button>
+            </div>
+
+            <div class="space-y-3">
+                <p class="text-[11px] text-gray-500 leading-relaxed">
+                    Apna registered email address darj karein. Hum Firebase Auth se password reset link bhejenge.
+                </p>
+                <div>
+                    <label class="block text-[11px] font-bold text-gray-500 uppercase mb-1">Registered Email</label>
+                    <input type="email" id="forgotEmailInput" placeholder="Enter your registered email" class="w-full px-3.5 py-2.5 text-xs bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:border-indigo-600">
+                </div>
+                <button onclick="handleForgotPassword()" class="w-full py-3 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition mt-1 cursor-pointer">
+                    <i class="fa-solid fa-paper-plane mr-1"></i> Send Reset Link
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <nav class="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-gray-100 px-6 py-2.5 flex justify-between items-center z-40">
+        <a href="home.html" class="flex flex-col items-center text-gray-400 hover:text-indigo-600"><i class="fa-solid fa-house text-base"></i><span class="text-[10px] font-semibold mt-0.5">Home</span></a>
+        <a href="booking.html" class="flex flex-col items-center text-gray-400 hover:text-indigo-600"><i class="fa-solid fa-calendar-check text-base"></i><span class="text-[10px] font-semibold mt-0.5">Booking</span></a>
+        <a href="status.html" class="flex flex-col items-center text-gray-400 hover:text-indigo-600"><i class="fa-solid fa-clock-rotate-left text-base"></i><span class="text-[10px] font-semibold mt-0.5">Status</span></a>
+        <a href="history.html" class="flex flex-col items-center text-gray-400 hover:text-indigo-600"><i class="fa-solid fa-receipt text-base"></i><span class="text-[10px] font-semibold mt-0.5">History</span></a>
+        <a href="profile.html" class="flex flex-col items-center text-indigo-600"><i class="fa-solid fa-user text-base"></i><span class="text-[10px] font-bold mt-0.5">Profile</span></a>
+    </nav>
+
+    <script type="module">
+        import { onAuthStateChanged, sendPasswordResetEmail, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { onSnapshot, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+        import { auth, resolveActiveSalonId, buildSalonUrl, getCustomerDocRef } from "./tenant.js";
+
+        const activeSalonId = resolveActiveSalonId({ persist: true });
+        let currentUser = null;
+        let currentProfile = { name: "Customer", phone: "", email: "", notifications: true };
+
+        document.querySelectorAll("a[href]").forEach((link) => {
+            const href = link.getAttribute("href");
+            if (!href || href.startsWith("http") || href.startsWith("#")) return;
+            const base = href.split("?")[0];
+            link.setAttribute("href", buildSalonUrl(base, activeSalonId));
+        });
+
+        function renderProfileUI() {
+            const name = currentProfile.name || currentUser?.displayName || currentUser?.email?.split("@")[0] || "Customer";
+            const phone = currentProfile.phone || "";
+            const email = currentProfile.email || currentUser?.email || "";
+
+            document.getElementById("profileName").innerText = name;
+            document.getElementById("profilePhone").innerHTML = `<i class="fa-solid fa-phone text-indigo-500 text-[10px]"></i> ${phone ? `+91 ${phone}` : "Not set"}`;
+            document.getElementById("profileEmail").innerHTML = `<i class="fa-solid fa-envelope text-indigo-400 text-[10px]"></i> ${email || "Not set"}`;
+            document.getElementById("profileInitial").innerText = String(name).charAt(0).toUpperCase() || "C";
+            document.getElementById("notifToggle").checked = currentProfile.notifications !== false;
+        }
+
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            if (!user) {
+                window.location.href = buildSalonUrl("index.html", activeSalonId);
+                return;
+            }
+            currentProfile.email = user.email || "";
+            currentProfile.name = user.displayName || user.email?.split("@")[0] || "Customer";
+            renderProfileUI();
+
+            if (activeSalonId) {
+                onSnapshot(getCustomerDocRef(activeSalonId, user.uid), (snap) => {
+                    if (snap.exists()) {
+                        currentProfile = { ...currentProfile, ...snap.data() };
+                        renderProfileUI();
+                    }
+                });
+            }
+        });
+
+        window.openEditModal = function() {
+            document.getElementById("editNameInput").value = currentProfile.name || "";
+            document.getElementById("editPhoneInput").value = currentProfile.phone || "";
+            document.getElementById("editEmailInput").value = currentProfile.email || currentUser?.email || "";
+            const modal = document.getElementById("editModal");
+            modal.classList.remove("hidden");
+            modal.classList.add("flex");
+        };
+
+        window.closeEditModal = function() {
+            const modal = document.getElementById("editModal");
+            modal.classList.add("hidden");
+            modal.classList.remove("flex");
+        };
+
+        window.saveProfileChanges = async function() {
+            const newName = document.getElementById("editNameInput").value.trim();
+            const newPhone = document.getElementById("editPhoneInput").value.trim();
+
+            if (!newName) {
+                alert("Kripya apna naam darj karein.");
+                return;
+            }
+            if (newPhone && !/^\d{10}$/.test(newPhone)) {
+                alert("Kripya sahi 10-digit mobile number darj karein.");
+                return;
+            }
+
+            try {
+                if (currentUser) {
+                    await updateProfile(currentUser, { displayName: newName }).catch(() => {});
+                    if (activeSalonId) {
+                        await setDoc(
+                            getCustomerDocRef(activeSalonId, currentUser.uid),
+                            {
+                                uid: currentUser.uid,
+                                name: newName,
+                                phone: newPhone,
+                                email: currentUser.email || currentProfile.email,
+                                salonId: activeSalonId,
+                                updatedAt: serverTimestamp()
+                            },
+                            { merge: true }
+                        );
+                    }
+                }
+                currentProfile.name = newName;
+                currentProfile.phone = newPhone;
+                renderProfileUI();
+                window.closeEditModal();
+            } catch (err) {
+                console.error("Profile update error:", err);
+                alert("Profile update failed. Please try again.");
+            }
+        };
+
+        window.openPasswordModal = function() {
+            document.getElementById("forgotEmailInput").value = currentProfile.email || currentUser?.email || "";
+            const modal = document.getElementById("passwordModal");
+            modal.classList.remove("hidden");
+            modal.classList.add("flex");
+        };
+
+        window.closePasswordModal = function() {
+            const modal = document.getElementById("passwordModal");
+            modal.classList.add("hidden");
+            modal.classList.remove("flex");
+        };
+
+        window.handleForgotPassword = async function() {
+            const email = document.getElementById("forgotEmailInput").value.trim();
+            if (!email || !email.includes("@")) {
+                alert("Kripya apna sahi registered email darj karein.");
+                return;
+            }
+            try {
+                await sendPasswordResetEmail(auth, email);
+                alert(`📩 Password reset link aapke email (${email}) par bhej diya gaya hai!`);
+                window.closePasswordModal();
+            } catch (err) {
+                alert("Reset link bhejne mein error: " + (err?.message || "Try again"));
+            }
+        };
+
+        window.saveNotifPref = async function() {
+            const isChecked = document.getElementById("notifToggle").checked;
+            currentProfile.notifications = isChecked;
+            if (currentUser && activeSalonId) {
+                await setDoc(
+                    getCustomerDocRef(activeSalonId, currentUser.uid),
+                    { notifications: isChecked, updatedAt: serverTimestamp() },
+                    { merge: true }
+                ).catch(() => {});
+            }
+        };
+
+        window.shareAppAnywhere = async function() {
+            const appWebLink = buildSalonUrl("index.html", activeSalonId);
+            const shareData = {
+                title: "Salon Booking App",
+                text: `✨ Salon Booking App ✨\nSalon appointment book karne ke liye niche diye link par click karein:\n\n🔗 Booking Link:\n${appWebLink}`
+            };
+
+            try {
+                if (navigator.share) {
+                    await navigator.share(shareData);
+                } else {
+                    await navigator.clipboard.writeText(shareData.text);
+                    alert("📋 Link copied to clipboard!");
+                }
+            } catch (_) {}
+        };
+
+        window.logout = async function() {
+            sessionStorage.clear();
+            try { await signOut(auth); } catch (_) {}
+            window.location.href = buildSalonUrl("index.html", activeSalonId);
+        };
+    </script>
+</body>
+</html>
