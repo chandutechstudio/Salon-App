@@ -82,10 +82,10 @@
                 <input type="checkbox" id="notifToggle" onchange="saveNotifPref()" checked class="w-4 h-4 accent-indigo-600 cursor-pointer">
             </div>
 
-            <a href="tel:9876543210" class="flex items-center justify-between p-4 hover:bg-gray-50 transition">
+            <button type="button" onclick="openSupportModal()" class="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition text-left cursor-pointer">
                 <span class="flex items-center gap-3 font-semibold text-gray-700"><i class="fa-solid fa-headset text-indigo-600 text-base w-5"></i> Salon Support & Help</span>
                 <i class="fa-solid fa-chevron-right text-gray-300"></i>
-            </a>
+            </button>
         </div>
 
         <button onclick="logout()" class="w-full bg-red-50 hover:bg-red-100 text-red-600 font-bold py-3.5 rounded-2xl transition text-xs shadow-sm flex items-center justify-center gap-2 cursor-pointer">
@@ -93,6 +93,18 @@
         </button>
 
     </main>
+
+    <!-- Salon Support & Help Modal -->
+    <div id="supportModal" class="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-3xl p-6 space-y-4 shadow-xl">
+            <div class="flex items-center justify-between">
+                <h3 class="text-sm font-bold text-gray-900">Salon Support & Help</h3>
+                <button type="button" onclick="closeSupportModal()" class="text-gray-400 hover:text-gray-600 cursor-pointer"><i class="fa-solid fa-xmark text-base"></i></button>
+            </div>
+            <p class="text-[11px] text-gray-500">Connect with the salon on your preferred platform:</p>
+            <div id="supportLinksContainer" class="space-y-2.5 text-xs"></div>
+        </div>
+    </div>
 
     <div id="editModal" class="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 hidden items-center justify-center p-4">
         <div class="bg-white w-full max-w-sm rounded-3xl p-6 space-y-4 shadow-xl">
@@ -132,7 +144,7 @@
 
             <div class="space-y-3">
                 <p class="text-[11px] text-gray-500 leading-relaxed">
-                    Apna registered email address darj karein. Hum Firebase Auth se password reset link bhejenge.
+                    Enter your registered email address to receive a password reset link via email.
                 </p>
                 <div>
                     <label class="block text-[11px] font-bold text-gray-500 uppercase mb-1">Registered Email</label>
@@ -156,11 +168,12 @@
     <script type="module">
         import { onAuthStateChanged, sendPasswordResetEmail, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { onSnapshot, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-        import { auth, resolveActiveSalonId, buildSalonUrl, getCustomerDocRef } from "./tenant.js";
+        import { auth, resolveActiveSalonId, buildSalonUrl, getSalonDocRef, getCustomerDocRef } from "./tenant.js";
 
         const activeSalonId = resolveActiveSalonId({ persist: true });
         let currentUser = null;
         let currentProfile = { name: "Customer", phone: "", email: "", notifications: true };
+        let salonSupportConfig = { telegram: "", whatsapp: "", instagram: "" };
 
         document.querySelectorAll("a[href]").forEach((link) => {
             const href = link.getAttribute("href");
@@ -168,6 +181,82 @@
             const base = href.split("?")[0];
             link.setAttribute("href", buildSalonUrl(base, activeSalonId));
         });
+
+        function normalizeExternalUrl(rawUrl, platform) {
+            const val = String(rawUrl || "").trim();
+            if (!val) return "";
+            if (/^https?:\/\//i.test(val)) return val;
+            const cleanHandle = val.replace(/^@+/, "");
+            if (platform === "whatsapp") {
+                const digits = val.replace(/\D/g, "");
+                if (digits.length >= 10) return `https://wa.me/${digits}`;
+                return `https://wa.me/${encodeURIComponent(cleanHandle)}`;
+            }
+            if (platform === "telegram") {
+                return `https://t.me/${encodeURIComponent(cleanHandle)}`;
+            }
+            if (platform === "instagram") {
+                return `https://instagram.com/${encodeURIComponent(cleanHandle)}`;
+            }
+            return `https://${val}`;
+        }
+
+        function renderSupportModalLinks() {
+            const box = document.getElementById("supportLinksContainer");
+            if (!box) return;
+
+            const items = [];
+            const tg = normalizeExternalUrl(salonSupportConfig.telegram, "telegram");
+            const wa = normalizeExternalUrl(salonSupportConfig.whatsapp, "whatsapp");
+            const ig = normalizeExternalUrl(salonSupportConfig.instagram, "instagram");
+
+            if (wa) {
+                items.push(`<a href="${wa}" target="_blank" rel="noopener noreferrer" class="w-full flex items-center justify-between p-3.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold transition"><span class="flex items-center gap-2.5"><i class="fa-brands fa-whatsapp text-base text-emerald-600"></i> WhatsApp Support</span><i class="fa-solid fa-arrow-up-right-from-square text-xs"></i></a>`);
+            }
+            if (tg) {
+                items.push(`<a href="${tg}" target="_blank" rel="noopener noreferrer" class="w-full flex items-center justify-between p-3.5 rounded-2xl bg-sky-50 hover:bg-sky-100 text-sky-800 font-bold transition"><span class="flex items-center gap-2.5"><i class="fa-brands fa-telegram text-base text-sky-600"></i> Telegram Support</span><i class="fa-solid fa-arrow-up-right-from-square text-xs"></i></a>`);
+            }
+            if (ig) {
+                items.push(`<a href="${ig}" target="_blank" rel="noopener noreferrer" class="w-full flex items-center justify-between p-3.5 rounded-2xl bg-pink-50 hover:bg-pink-100 text-pink-800 font-bold transition"><span class="flex items-center gap-2.5"><i class="fa-brands fa-instagram text-base text-pink-600"></i> Instagram Support</span><i class="fa-solid fa-arrow-up-right-from-square text-xs"></i></a>`);
+            }
+
+            if (items.length === 0) {
+                box.innerHTML = `<p class="text-xs text-gray-400 text-center py-4 bg-gray-50 rounded-2xl">Support links have not been configured by the salon owner yet.</p>`;
+            } else {
+                box.innerHTML = items.join("");
+            }
+        }
+
+        if (activeSalonId) {
+            onSnapshot(getSalonDocRef(activeSalonId), (snap) => {
+                if (!snap.exists()) return;
+                const d = snap.data() || {};
+                const support = d.supportLinks || d.socialLinks || d.support || {};
+                salonSupportConfig = {
+                    telegram: d.supportTelegram || d.telegram || d.telegramLink || support.telegram || "",
+                    whatsapp: d.supportWhatsapp || d.whatsapp || d.whatsappLink || support.whatsapp || "",
+                    instagram: d.supportInstagram || d.instagram || d.instagramLink || support.instagram || ""
+                };
+                renderSupportModalLinks();
+            }, () => {});
+        }
+
+        window.openSupportModal = function() {
+            renderSupportModalLinks();
+            const modal = document.getElementById("supportModal");
+            if (modal) {
+                modal.classList.remove("hidden");
+                modal.classList.add("flex");
+            }
+        };
+
+        window.closeSupportModal = function() {
+            const modal = document.getElementById("supportModal");
+            if (modal) {
+                modal.classList.add("hidden");
+                modal.classList.remove("flex");
+            }
+        };
 
         function renderProfileUI() {
             const name = currentProfile.name || currentUser?.displayName || currentUser?.email?.split("@")[0] || "Customer";
@@ -221,11 +310,11 @@
             const newPhone = document.getElementById("editPhoneInput").value.trim();
 
             if (!newName) {
-                alert("Kripya apna naam darj karein.");
+                alert("Please enter your full name.");
                 return;
             }
             if (newPhone && !/^\d{10}$/.test(newPhone)) {
-                alert("Kripya sahi 10-digit mobile number darj karein.");
+                alert("Please enter a valid 10-digit mobile number.");
                 return;
             }
 
@@ -253,7 +342,7 @@
                 window.closeEditModal();
             } catch (err) {
                 console.error("Profile update error:", err);
-                alert("Profile update failed. Please try again.");
+                alert("Failed to update profile. Please try again.");
             }
         };
 
@@ -273,15 +362,15 @@
         window.handleForgotPassword = async function() {
             const email = document.getElementById("forgotEmailInput").value.trim();
             if (!email || !email.includes("@")) {
-                alert("Kripya apna sahi registered email darj karein.");
+                alert("Please enter a valid registered email address.");
                 return;
             }
             try {
                 await sendPasswordResetEmail(auth, email);
-                alert(`📩 Password reset link aapke email (${email}) par bhej diya gaya hai!`);
+                alert(`Password reset link sent to ${email}.`);
                 window.closePasswordModal();
             } catch (err) {
-                alert("Reset link bhejne mein error: " + (err?.message || "Try again"));
+                alert("Could not send reset link: " + (err?.message || "Please try again."));
             }
         };
 
@@ -299,17 +388,18 @@
 
         window.shareAppAnywhere = async function() {
             const appWebLink = buildSalonUrl("index.html", activeSalonId);
-            const shareData = {
-                title: "Salon Booking App",
-                text: `✨ Salon Booking App ✨\nSalon appointment book karne ke liye niche diye link par click karein:\n\n🔗 Booking Link:\n${appWebLink}`
-            };
+            const shareText = `Book your salon appointment using this link:\n${appWebLink}`;
 
             try {
                 if (navigator.share) {
-                    await navigator.share(shareData);
+                    await navigator.share({
+                        title: "Salon Booking App",
+                        text: shareText,
+                        url: appWebLink
+                    });
                 } else {
-                    await navigator.clipboard.writeText(shareData.text);
-                    alert("📋 Link copied to clipboard!");
+                    await navigator.clipboard.writeText(appWebLink);
+                    alert("App link copied to clipboard!");
                 }
             } catch (_) {}
         };
